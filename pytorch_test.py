@@ -73,7 +73,7 @@ class LinearPolicy:
     TODO move to policy.py
     '''
     def __init__(self, dna, state_dim, hidden_dim, act_dim):
-        generator = torch.Generator()
+        self.generator = torch.Generator()
 
         self.l1 = torch.zeros(size=(state_dim, hidden_dim))
         self.l2 = torch.zeros(size=(hidden_dim, act_dim))
@@ -81,8 +81,9 @@ class LinearPolicy:
         # recompute ("birth") the new policy network from the dna 
         for s in dna.seeds:
             # TODO should std be something different? For initializing networks?
-            self.l1 += torch.normal(mean=0, std=1, size=self.l1.shape)
-            self.l2 += torch.normal(mean=0, std=1, size=self.l2.shape)
+            self.generator.manual_seed(s)
+            self.l1 += torch.normal(mean=0, std=1, size=self.l1.shape, generator=self.generator)
+            self.l2 += torch.normal(mean=0, std=1, size=self.l2.shape, generator=self.generator)
 
     def act(self, state):
         state = torch.tensor(state)
@@ -160,26 +161,32 @@ def flattened_shape(shape):
     return reduce(lambda x,y: x*y, shape, 1)  # compute product
     
 
-class OneTime(EvaluationMethod):
-    def __init__(self, env_id):
+class NTimes(EvaluationMethod):
+    def __init__(self, env_id, times=1, render_mode=None):
         self.env_id = env_id
+        self.render_mode=render_mode
+        self.times=times
     def eval(self, dna, policy_network_class):
-        env = gym.make(self.env_id)
+        env = gym.make(self.env_id, render_mode=self.render_mode)
         state_shape = flattened_shape(env.observation_space.shape)
         action_shape  = env.action_space.n
         policy_network = policy_network_class(dna, state_shape, 100, action_shape)
         state, _ = env.reset()
         step = 0
         total_reward = 0
-        while True:
-            step += 1
-            action = policy_network.act(state)
-            state, reward, done, _, info = env.step(action)
-            total_reward += reward
-            if done:
-                return Individual(dna, total_reward)
+        for i in range(self.times):
+            while True:
+                step += 1
+                #print(step)
+                action = policy_network.act(state)
+                state, reward, terminated, truncated, info = env.step(action)
+                total_reward += reward
+                if terminated or truncated:
+                    state, _ = env.reset()
+                    break
+        return Individual(dna, total_reward / self.times)
 
-EvaluationMethod.register(OneTime)
+EvaluationMethod.register(NTimes)
 
 def picklable_eval(dna, policy_network_class, evaluation_method):
   return evaluation_method.eval(dna, policy_network_class)
@@ -194,11 +201,9 @@ class DistributedMethod(ABC):
     @abstractmethod
     def get_task_result(self):
         pass
-    # TODO understand what is going on here?
     def __enter__(self):
         return self
-    # TODO understand what is going on here?
-    def __exit__(self):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         pass
         
 class LocalSynchronous(DistributedMethod):
@@ -212,6 +217,8 @@ class LocalSynchronous(DistributedMethod):
 
     def get_task_result(self):
         return self.queue.pop()
+
+
 DistributedMethod.register(LocalSynchronous)
  
 class LocalMultithreaded(DistributedMethod):
@@ -241,6 +248,13 @@ class LocalMultithreaded(DistributedMethod):
 
     def get_task_result(self):
         return self.queue.get()
+
+    # TODO understand this better, is it correct?
+    def __enter__(self):
+        self.pool.__enter__()
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.pool.__exit__(exc_type, exc_val, exc_tb)
         
 
 DistributedMethod.register(LocalMultithreaded)
@@ -258,8 +272,11 @@ if __name__ == '__main__':
     num_elites = 1
     concurrent_tasks = 1
     env_id = 'CartPole-v1'
+    eval_times=10
 
-    eval_method = OneTime(env_id)
+    target_fitness = 500
+
+    eval_method = NTimes(env_id, times=eval_times)
 
     #with LocalMultithreaded(None, eval_method) as task_manager:
     with LocalSynchronous(eval_method) as task_manager:
@@ -282,10 +299,16 @@ if __name__ == '__main__':
              individual = task_manager.get_task_result()
              #print("Got result, adding to population")
              population.add_individual(individual)
+             if individual.fitness >= target_fitness:
+                 break
              #print("Making child")
              child = population.reproduce()
              #print("Adding child task")
              task_manager.add_task(child, LinearPolicy)
+
+    render_eval = NTimes('CartPole-v1', times=1, render_mode='human')
+    render_eval.eval(individual.dna, LinearPolicy)
+
 
 
     

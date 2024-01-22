@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from collections import namedtuple
 from sortedcontainers import SortedList
 import multiprocessing as mp
+import queue
 import gymnasium as gym
 import random
 from random import Random
@@ -88,13 +89,15 @@ class LinearPolicy:
     def act(self, state):
         state = torch.tensor(state)
         hidden = torch.nn.functional.relu(torch.matmul(state,  self.l1))
-        probs = torch.nn.functional.softmax(torch.matmul(hidden, self.l2))
+        probs = torch.nn.functional.softmax(torch.matmul(hidden, self.l2), dim=0)
         action = torch.multinomial(probs, 1)
         return action.item()
 PolicyNetwork.register(LinearPolicy)
 
 
-Individual = namedtuple('individual',['dna','fitness'])
+# namedtuples must be named the same as the class name "Individual"
+# otherwise mp wont be able to find it
+Individual = namedtuple('Individual',['dna','fitness'])
 
 class Population(ABC):
 
@@ -142,7 +145,7 @@ class EliteAsexual(Population):
         # first, remove a random non-elite individual. Then add the new one.
         self.codes.pop(random.randrange(self.num_elites, self.population_size))
         self.codes.add(individual)
-        print(f"BEST: {self.codes[0].fitness}. NEW: {individual.fitness}")
+        print(f"BEST: {self.codes[0].fitness}. NEW: {individual.fitness}", flush=True)
 Population.register(EliteAsexual)
 
 
@@ -177,7 +180,6 @@ class NTimes(EvaluationMethod):
         for i in range(self.times):
             while True:
                 step += 1
-                #print(step)
                 action = policy_network.act(state)
                 state, reward, terminated, truncated, info = env.step(action)
                 total_reward += reward
@@ -188,8 +190,11 @@ class NTimes(EvaluationMethod):
 
 EvaluationMethod.register(NTimes)
 
-def picklable_eval(dna, policy_network_class, evaluation_method):
-  return evaluation_method.eval(dna, policy_network_class)
+def worker(dna, policy_network_class, evaluation_method):
+  worker.queue.put(evaluation_method.eval(dna, policy_network_class))
+
+def worker_initializer(queue):
+    worker.queue = queue
 
 class DistributedMethod(ABC):
     @abstractmethod
@@ -209,14 +214,14 @@ class DistributedMethod(ABC):
 class LocalSynchronous(DistributedMethod):
     def __init__(self, evaluation_method: EvaluationMethod):
         self.evaluation_method = evaluation_method
-        self.queue = []
+        self.queue = queue.Queue()
+        worker_initializer(self.queue)
 
     def add_task(self, dna, policy_network_class):
-        result = picklable_eval(dna, policy_network_class, self.evaluation_method)
-        self.queue.append(result)
+        worker(dna, policy_network_class, self.evaluation_method)
 
     def get_task_result(self):
-        return self.queue.pop()
+        return self.queue.get()
 
 
 DistributedMethod.register(LocalSynchronous)
@@ -232,19 +237,12 @@ class LocalMultithreaded(DistributedMethod):
     '''
     def __init__(self, pool_size, evaluation_method: EvaluationMethod):
         self.queue = mp.Queue()
-        self.pool = mp.Pool(pool_size)
         self.evaluation_method = evaluation_method
+        self.pool = mp.Pool(pool_size, initializer=worker_initializer, initargs=(self.queue,))
 
     def add_task(self, dna, policy_network_class):
 
-        def eval(dna, policy_network_class):
-            result = self.evaluation_method.eval(dna, policy_network_class)
-            self.queue.put((dna, result))
-
-        print("Calling apply async...")
-        #self.pool.apply_async(eval, (dna, policy_network_class))
-        #self.pool.apply_async(picklable_test, ('in picklable test',))
-        self.pool.apply_async(picklable_eval, (dna, policy_network_class, self.evaluation_method))
+        self.pool.apply_async(worker, (dna, policy_network_class, self.evaluation_method))
 
     def get_task_result(self):
         return self.queue.get()
@@ -278,8 +276,8 @@ if __name__ == '__main__':
 
     eval_method = NTimes(env_id, times=eval_times)
 
-    #with LocalMultithreaded(None, eval_method) as task_manager:
-    with LocalSynchronous(eval_method) as task_manager:
+    with LocalMultithreaded(None, eval_method) as task_manager:
+    #with LocalSynchronous(eval_method) as task_manager:
 
         population = EliteAsexual(
                 BasicDNA, 
@@ -290,20 +288,15 @@ if __name__ == '__main__':
 
         for i in range(concurrent_tasks):
             child = population.reproduce()
-            #print(f"Adding initial task {i}")
             task_manager.add_task(child, LinearPolicy)
 
         while True:
              # TODO rename 'individual', 'task_result', etc
-             #print("Awaiting task result...")
              individual = task_manager.get_task_result()
-             #print("Got result, adding to population")
              population.add_individual(individual)
              if individual.fitness >= target_fitness:
                  break
-             #print("Making child")
              child = population.reproduce()
-             #print("Adding child task")
              task_manager.add_task(child, LinearPolicy)
 
     render_eval = NTimes('CartPole-v1', times=1, render_mode='human')

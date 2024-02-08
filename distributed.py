@@ -71,3 +71,60 @@ class LocalMultithreaded(DistributedMethod):
         
 
 DistributedMethod.register(LocalMultithreaded)
+
+
+
+class DistributedRedis(DistributedMethod):
+
+    def __init__(self, pool_size, evaluation_method: EvaluationMethod):
+        self.queue = mp.Queue()
+        self.evaluation_method = evaluation_method
+        self.pool = mp.Pool(pool_size, initializer=worker_initializer, initargs=(self.queue,))
+
+    def add_task(self, dna, policy_network_class):
+
+        self.pool.apply_async(worker, (dna, policy_network_class, self.evaluation_method))
+
+    def get_task_result(self):
+        return self.queue.get()
+
+    def retry_connect(self, redis_cfg, tries=300, base_delay=4.):
+        for i in range(tries):
+            try:
+                r = redis.StrictRedis(**redis_cfg)
+                r.ping()
+                return r
+            except redis.ConnectionError as e:
+                if i == tries - 1:
+                    raise
+                else:
+                    delay = base_delay * (1 + (os.getpid() % 10) / 9)
+                    logger.warning('Could not connect to {}. Retrying after {:.2f} sec ({}/{}). Error: {}'.format(
+                        redis_cfg, delay, i + 2, tries, e))
+                    time.sleep(delay)
+
+    def retry_get(pipe, key, tries=300, base_delay=4.):
+        for i in range(tries):
+            # Try to (m)get
+            if isinstance(key, (list, tuple)):
+                vals = pipe.mget(key)
+                if all(v is not None for v in vals):
+                    return vals
+            else:
+                val = pipe.get(key)
+                if val is not None:
+                    return val
+            # Sleep and retry if any key wasn't available
+            if i != tries - 1:
+                delay = base_delay * (1 + (os.getpid() % 10) / 9)
+                logger.warning('{} not set. Retrying after {:.2f} sec ({}/{})'.format(key, delay, i + 2, tries))
+                time.sleep(delay)
+        raise RuntimeError('{} not set'.format(key))
+
+'''
+Simplest framework:
+Each worker system only has to 
+1. query the master for a new task
+2. publish results of task to the master
+
+'''

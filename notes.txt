@@ -5,3 +5,6 @@ They just use os.fork() to start all the worker processes, which then communicat
 
 If we need a distributed caching system, I think we should use memcached - simpler, multithreaded caching
 But I don't see why we need a distributed caching system at all
+
+
+Roms are installed: /Users/luke/Library/Python/3.9/lib/python/site-packages/AutoROM/roms

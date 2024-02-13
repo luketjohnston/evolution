@@ -1,0 +1,25 @@
+services:
+  rabbitmq:
+    image: "rabbitmq:3-alpine"
+    ports:
+      - "5672:5672" 
+      - "15672:15672" # management gui
+  master:
+    depends_on:
+      - rabbitmq
+    build: 
+      dockerfile: Dockerfile
+      args:
+        MASTER_WORKER_ARG: "master"
+  worker:
+    depends_on:
+      - rabbitmq
+    build: 
+      dockerfile: Dockerfile
+      args:
+        MASTER_WORKER_ARG: "worker"
+    deploy:
+      mode: replicated
+      replicas: 6
+
+

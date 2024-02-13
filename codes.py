@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import pickle
 
 class DNA(ABC):
     @abstractmethod
@@ -27,10 +28,11 @@ class BasicDNA:
         child.seeds = self.seeds + [random_seed]
         return child
     def serialize(self):
-        return tuple(self.seeds)
+        return pickle.dumps(tuple(self.seeds))
     def deserialize(serialized):
-        gc = BasicDNA(serialized[0])
-        gc.seeds = list(serialized)
+        seeds = pickle.loads(serialized)
+        gc = BasicDNA(seeds[0])
+        gc.seeds = list(seeds)
         return gc
 DNA.register(BasicDNA)
 

@@ -9,7 +9,7 @@ class EvaluationMethod(ABC):
     def __init__(self):
         pass
     @abstractmethod
-    def eval(self, dna, policy_network_class):
+    def eval(self, dna):
         pass
 
 # given an environment observation_space.shape or action_space.shape, 
@@ -20,20 +20,21 @@ def flattened_shape(shape):
     
 
 class NTimes(EvaluationMethod):
-    def __init__(self, env_id, times=1, render_mode=None):
+    def __init__(self, env_id, policy_network_class, times=1, render_mode=None):
         self.env_id = env_id
         self.render_mode=render_mode
         self.times=times
-    def eval(self, dna, policy_network_class):
+        self.policy_network_class = policy_network_class
+    def eval(self, dna):
         t1 = time.time()
         env = gym.make(self.env_id, render_mode=self.render_mode)
         t2 = time.time()
         action_shape  = env.action_space.n
         # TODO make this less hacky
-        if policy_network_class is LinearPolicy:
+        if self.policy_network_class is LinearPolicy:
             state_shape = flattened_shape(env.observation_space.shape)
-            policy_network = policy_network_class(dna, state_shape, 100, action_shape)
-        elif policy_network_class is ConvPolicy:
+            policy_network = self.policy_network_class(dna, state_shape, 100, action_shape)
+        elif self.policy_network_class is ConvPolicy:
             state_shape = env.observation_space.shape
             #kernels = [8,4,3]
             #channels = [3,16,32,32]
@@ -49,7 +50,7 @@ class NTimes(EvaluationMethod):
             #channels = [3,8,16]
             #strides = [4,2]
             #hidden_size = 128
-            policy_network = policy_network_class(dna, state_shape, kernels, channels, strides, action_shape, hidden_size)
+            policy_network = self.policy_network_class(dna, state_shape, kernels, channels, strides, action_shape, hidden_size)
         else:
             assert False, "unsupported policy class type {policy_network}"
         t3 = time.time()

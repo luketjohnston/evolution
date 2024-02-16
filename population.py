@@ -61,10 +61,11 @@ class EliteAsexual(Population):
         print(f"BEST: {self.parent_generation[0].fitness}. NEW: {individual.fitness}", flush=True)
 
         if len(self.grownups) >= self.child_population_size:
-          print(f"FINISHED GENERATION {self.generation}")
+          print(f"FINISHED GENERATION {self.generation}", flush=True)
+          self.last_generation_all_grownups = self.grownups
           self.generation += 1
           self.parent_generation = SortedList(self.parent_generation[:self.num_elites] + self.grownups[:self.parent_population_size - self.num_elites], key=lambda x: -x.fitness)
-          print(f"New parent generation: {self.parent_generation}")
+          print(f"New parent generation: {self.parent_generation}", flush=True)
           self.children = [self.reproduce() for c in range(self.child_population_size)]
           self.grownups = SortedList([], key=lambda x: -x.fitness)
           return self.children

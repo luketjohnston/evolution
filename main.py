@@ -5,6 +5,11 @@ This file contains base classes and common methods for various types of genetic 
 See codes.py, policies.py, populations.py, and evaluations.py, distributed.py for inheriting classes.
 '''
 
+from tensorboard import program
+
+
+#import matplotlib
+from torch.utils.tensorboard import SummaryWriter
 import pickle
 from population import EliteAsexual
 from distributed import LocalSynchronous, LocalMultithreaded, DistributedRabbitMQ
@@ -20,13 +25,20 @@ import torch
 
 
 if __name__ == '__main__':
-    if torch.backends.mps.is_available():
-        mps_device = torch.device("mps")
-    else:
-        print ("MPS device not found.")
-        assert False
+    print("About to print sys args:", flush=True)
+    print(f'sys.argv: {sys.argv}', flush=True)
+
+    tracking_address = './tensorboards'
+    
+    # launches tensorboard in daemon thread, will stop when this program stops
+    tb = program.TensorBoard()
+    tb.configure(argv=[None, '--logdir', tracking_address])
+    url = tb.launch()
+
+    writer = SummaryWriter(log_dir='./tensorboards')
 
     assert (sys.argv[1] == 'worker') or (sys.argv[1] == 'master')
+    print("after assert", flush=True)
     is_master = (sys.argv[1] == 'master')
 
 
@@ -53,12 +65,12 @@ if __name__ == '__main__':
     eval_method = NTimes(env_id, policy_network_class=policy_class, times=eval_times)
     #eval_method = NTimes(env_id, times=eval_times, render_mode='human')
     #with LocalMultithreaded(None, eval_method) as task_manager:
-    #with LocalSynchronous(eval_method) as task_manager:
-    with DistributedRabbitMQ(eval_method, is_master=is_master) as task_manager:
+    with LocalSynchronous(eval_method) as task_manager:
+    #with DistributedRabbitMQ(eval_method, is_master=is_master) as task_manager:
         if not is_master:
             task_manager.start_worker()
         else:
-            print("Creating population")
+            print("Creating population",flush=True)
             population = EliteAsexual(
                     BasicDNA, 
                     parent_population_size, 
@@ -71,12 +83,15 @@ if __name__ == '__main__':
                 task_manager.add_task(child)
 
             start = time.time()
+            generation = 0
+            total_frames = 0
 
             for individual, metadata in task_manager.get_task_results():
                  # TODO rename 'individual', 'task_result', etc
                  total_training_frames += metadata['total_frames']
-                 print(metadata)
-                 print("Average total fps: ", total_training_frames / (time.time() - start))
+                 total_frames += metadata['total_frames']
+                 print(metadata,flush=True)
+                 print("Average total fps: ", total_training_frames / (time.time() - start), flush=True)
                  # most of the time, next_generation will be an empty list.
                  next_generation = population.add_grownup(individual)
                  if individual.fitness >= target_fitness:
@@ -84,6 +99,15 @@ if __name__ == '__main__':
                  if individual.fitness > best_fitness:
                      best_fitness = individual.fitness
                      pickle.dump(individual.dna, open(f'saves/{env_id.split("/")[-1]}_{individual.fitness}.pkl', 'wb'))
+                 if next_generation:
+                     generation += 1
+                     # plot best fitness and average fitness
+                     ave_fitness = sum([x.fitness for x in population.last_generation_all_grownups])
+                     ave_fitness /= len(population.last_generation_all_grownups)
+                     writer.add_scalar('ave_fitness', ave_fitness, generation)
+                     writer.add_scalar('best_fitness', best_fitness, generation)
+                     writer.add_scalar('total_frames', total_frames, generation)
+
 
                  # most of the time, next_generation will be an empty list.
                  # TODO: should probably add some logic to clear existing tasks if we don't need

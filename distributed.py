@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import time
 import pickle
 from codes import BasicDNA
 from evaluations import EvaluationMethod
@@ -80,8 +81,15 @@ DistributedMethod.register(LocalMultithreaded)
 class DistributedRabbitMQ(DistributedMethod):
     def __init__(self, evaluation_method: EvaluationMethod, is_master=True):
         # don't do anything with the evaluation method - will have to setup workers elsewhere
-        self.connection = pika.BlockingConnection(
-            pika.ConnectionParameters(host='localhost'))
+        print("Connecting to rabbitmq...", flush=True)
+        while True: # Have to retry until rabbitmq service is up, TODO clean up
+            try:
+                self.connection = pika.BlockingConnection(
+                    pika.ConnectionParameters(host='rabbitmq', port=5672)) # rabbitmq to match docker service name??
+                break
+            except:
+                time.sleep(1)
+        print("Succesfully connected to rabbitmq", flush=True)
         self.channel = self.connection.channel()
         self.channel.queue_declare(queue='task_queue', durable=True) # TODO do we want durable?
         self.channel.queue_declare(queue='results_queue', durable=True)

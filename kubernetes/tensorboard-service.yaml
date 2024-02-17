@@ -5,9 +5,11 @@ metadata:
   labels:
     run: tensorboard
 spec:
+  type: NodePort # allows connecting from outside cluster
   ports:
   - port: 6006
     name: "ui"
     protocol: TCP
+    nodePort: 30007
   selector:
     app: master

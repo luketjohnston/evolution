@@ -2,7 +2,8 @@
 FROM python:3.11.8-bookworm
 WORKDIR /genetic
 COPY requirements.txt requirements.txt
-RUN pip install "gymnasium[accept-rom-license]" # downloads ALE roms, accepts license, installs
-RUN pip install -r requirements.txt
-RUN pip install pika
+#RUN pip install --no-cache-dir "gymnasium[accept-rom-license]" && \
+# Make sure there is only one RUN command so we only make one layer,
+# and need --no-cache-dir to make it as small as possible
+RUN  pip install --no-cache-dir -r requirements.txt
 COPY ./code .

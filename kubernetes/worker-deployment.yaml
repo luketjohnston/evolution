@@ -20,4 +20,3 @@ spec:
           #imagePullPolicy: Never # Need this when using local images
           command: ["python"]
           args: ["main.py", "worker"]
-        

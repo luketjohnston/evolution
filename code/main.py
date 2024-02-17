@@ -7,8 +7,8 @@ See codes.py, policies.py, populations.py, and evaluations.py, distributed.py fo
 
 from tensorboard import program
 
-
 #import matplotlib
+import os
 from torch.utils.tensorboard import SummaryWriter
 import pickle
 from population import EliteAsexual
@@ -41,6 +41,8 @@ if __name__ == '__main__':
     print("after assert", flush=True)
     is_master = (sys.argv[1] == 'master')
 
+    os.makedirs('saves',exist_ok=True)
+
 
     population_size = 1000
     num_elites = 1
@@ -65,8 +67,8 @@ if __name__ == '__main__':
     eval_method = NTimes(env_id, policy_network_class=policy_class, times=eval_times)
     #eval_method = NTimes(env_id, times=eval_times, render_mode='human')
     #with LocalMultithreaded(None, eval_method) as task_manager:
-    with LocalSynchronous(eval_method) as task_manager:
-    #with DistributedRabbitMQ(eval_method, is_master=is_master) as task_manager:
+    #with LocalSynchronous(eval_method) as task_manager:
+    with DistributedRabbitMQ(eval_method, is_master=is_master) as task_manager:
         if not is_master:
             task_manager.start_worker()
         else:

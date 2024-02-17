@@ -16,8 +16,8 @@ spec:
     spec:
       containers:
         - name: worker
-          image: takeover
-          imagePullPolicy: Never # Need this when using local images
+          image:  357830361939.dkr.ecr.us-east-2.amazonaws.com/genetic:worker
+          #imagePullPolicy: Never # Need this when using local images
           command: ["python"]
           args: ["main.py", "worker"]
         

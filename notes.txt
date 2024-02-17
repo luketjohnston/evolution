@@ -1,23 +1,2 @@
-They use redis for worker communications to master, pushing and popping task requests and results from lists
-
-They just use os.fork() to start all the worker processes, which then communicate using redis
-(rather than any mp map/pool type thing)
-
-If we need a distributed caching system, I think we should use memcached - simpler, multithreaded caching
-But I don't see why we need a distributed caching system at all
-
-
 Roms are installed: /Users/luke/Library/Python/3.9/lib/python/site-packages/AutoROM/roms
 
-
-TODO:
-- dockerfile for master
-- dockerfile for worker (are they the same?)
-- dockerfile for redis
-- docker compose for all
-- update distributed communication to use redis
-
-STEP 1:
-get a local version working with a redis database.
-
-Use fargate for AWS?

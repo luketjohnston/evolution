@@ -2,12 +2,14 @@ Reproduction of the paper "Deep Neuroevolution: Genetic Algorithms are a Competi
 Alternative for Training Deep Neural Networks for Reinforcement Learning."
 https://arxiv.org/pdf/1712.06567.pdf
 
+Also using as a way to learn how to run distributed computing on clusters on aws spot
+instances.
 
 Currently distributed.py has options for to use local synchronous computation,
 python multiprocessing, or RabbitMQ.
 
-scripts/build.sh builds the image for kubernetes master/worker nodes
-scripts/start.sh deploys master, worker, rabbitmq, and tensorboard nodes/services
+scripts/build.sh builds the image for kubernetes master/worker pods
+scripts/start.sh deploys master, worker, rabbitmq, and tensorboard pods/services
 to the cluster.
 
 Current status 2/17/24: everything is working on Cartpole on amazon eks, next step

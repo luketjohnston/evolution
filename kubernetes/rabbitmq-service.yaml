@@ -5,6 +5,7 @@ metadata:
   labels:
     run: rabbitmq
 spec:
+  type: NodePort # allows connecting from outside cluster
   ports:
   - port: 5672
     name: "messages"
@@ -12,5 +13,6 @@ spec:
   - port: 15672
     name: "ui"
     protocol: TCP
+    nodePort: 30008
   selector:
     app: rabbitmq

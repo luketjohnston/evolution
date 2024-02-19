@@ -16,8 +16,13 @@ spec:
     spec:
       containers:
         - name: master
-          image:  357830361939.dkr.ecr.us-east-2.amazonaws.com/genetic:worker
+          image:  357830361939.dkr.ecr.us-east-2.amazonaws.com/genetic:worker-amd64
           #imagePullPolicy: Never # Need this when using local images
+          imagePullPolicy: "Always" # so we make sure to update image code changes 
           command: ["python"]
           args: ["main.py", "master"]
+      nodeSelector:
+        # to figure this out, we can run 
+        # $ kubectl get nodes --show-labels
+        alpha.eksctl.io/nodegroup-name: master-ng
         

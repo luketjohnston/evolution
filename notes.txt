@@ -1,2 +1,15 @@
 Roms are installed: /Users/luke/Library/Python/3.9/lib/python/site-packages/AutoROM/roms
 
+
+If I get this error when using eksctl:
+Error: checking AWS STS access – cannot get role ARN for current session: operation error STS: GetCallerIdentity, https response error StatusCode: 0, RequestID: , request send failed, Post "https://sts..amazonaws.com/": dial tcp: lookup sts..amazonaws.com: no such host
+If I just specify the region to be us-west-2, then it works again.
+TODO investigate
+
+
+TODO: 
+the "frames" reported in the GA paper are "game frames", not "training frames". 
+So if we train on every 4th frame, make sure we are incrementing frame count by 4 each training
+step. Not sure if I am doing this right now.
+
+TODO: havent figured out how to connect to rabbitmq UI

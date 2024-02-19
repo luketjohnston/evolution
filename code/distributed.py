@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
+import functools
+import datetime
 import time
 import pickle
+from threading import Thread
 from codes import BasicDNA
 from evaluations import EvaluationMethod
 import multiprocessing as mp
@@ -118,24 +121,42 @@ class DistributedRabbitMQ(DistributedMethod):
 
     def start_worker(self):
         assert not self.is_master
+        ''' we have to do the work in a separate thread (so that pika can continue sending
+        heartbeats to rabbitmq). Then we have to use add_callback_threadsafe to communicate 
+        from this other thread when the job finishes.
+        see https://stackoverflow.com/questions/52973253/rabbitmq-pika-exceptions-connectionclosed-1-error104-connection-reset-by '''
 
-        # TODO import this from constants file somewhere? Or move into 
-        # eval method?
-
-        def callback(ch, method, properties, body):
-            dna = BasicDNA.deserialize(body) # TODO pass dna type as arg somewhere?
-            evaluation = self.eval_method.eval(dna)
-            # send evaluation result back to master
-            self.channel.basic_publish(
+        def send_result(channel, delivery_tag, evaluation):
+            print("Sending result", datetime.datetime.now(), flush=True)
+            channel.basic_publish(
                 exchange='',
                 routing_key='results_queue',
                 body=pickle.dumps(evaluation),
                 properties=pika.BasicProperties(
                     delivery_mode=pika.DeliveryMode.Persistent
                 ))
-            ch.basic_ack(delivery_tag=method.delivery_tag)
+            print("Acking", datetime.datetime.now(), flush=True)
+            channel.basic_ack(delivery_tag=delivery_tag)
+
+        # We need to do the work in separate thread, otherwise pika won't be able
+        # to send its heartbeats often enough and rabbitmq will time it out.
+        def do_work_and_ack(ch, method, properties, body):
+            print("doing work", datetime.datetime.now(), flush=True)
+            dna = BasicDNA.deserialize(body) # TODO pass dna type as arg somewhere?
+            evaluation = self.eval_method.eval(dna)
+            delivery_tag = method.delivery_tag
+            print("Done, adding callback", datetime.datetime.now(), flush=True)
+            self.connection.add_callback_threadsafe(functools.partial(send_result, ch, delivery_tag, evaluation))
+
+        def callback(ch, method, properties, body):
+            print(f"Starting thread for {body}: ", datetime.datetime.now(), flush=True)
+            t = Thread(target=do_work_and_ack, args=(ch, method, properties, body))
+            t.start()
+
+
 
         self.channel.basic_qos(prefetch_count=1)
         self.channel.basic_consume(queue='task_queue', on_message_callback=callback)
+        print("Starting consuming...", flush=True)
         self.channel.start_consuming()
 

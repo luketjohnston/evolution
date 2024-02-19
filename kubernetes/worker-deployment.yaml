@@ -5,7 +5,7 @@ metadata:
   labels:
     app: worker
 spec:
-  replicas: 2
+  replicas: 10
   selector:
     matchLabels:
       app: worker
@@ -16,7 +16,12 @@ spec:
     spec:
       containers:
         - name: worker
-          image:  357830361939.dkr.ecr.us-east-2.amazonaws.com/genetic:worker
+          image:  357830361939.dkr.ecr.us-east-2.amazonaws.com/genetic:worker-amd64
           #imagePullPolicy: Never # Need this when using local images
+          imagePullPolicy: "Always" # so we make sure to update image code changes 
           command: ["python"]
           args: ["main.py", "worker"]
+      nodeSelector:
+        # to figure this out, we can run 
+        # $ kubectl get nodes --show-labels
+        alpha.eksctl.io/nodegroup-name: worker-ng

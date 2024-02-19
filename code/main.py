@@ -8,6 +8,7 @@ See codes.py, policies.py, populations.py, and evaluations.py, distributed.py fo
 from tensorboard import program
 
 #import matplotlib
+import datetime
 import os
 from torch.utils.tensorboard import SummaryWriter
 import pickle
@@ -52,14 +53,14 @@ if __name__ == '__main__':
     parent_population_size = 32
     child_population_size = 128 
 
-    env_id = 'CartPole-v1'
+    #env_id = 'CartPole-v1'
     #env_id = 'ALE/Breakout-v5'
-    #env_id = 'ALE/Frostbite-v5'
-    eval_times=10
-    #policy_class = ConvPolicy
-    policy_class = LinearPolicy
+    env_id = 'ALE/Frostbite-v5'
+    eval_times=3
+    policy_class = ConvPolicy
+    #policy_class = LinearPolicy
 
-    target_fitness = 5000
+    target_fitness = 8000
     best_fitness = 0
 
     total_training_frames = 0
@@ -70,6 +71,7 @@ if __name__ == '__main__':
     #with LocalSynchronous(eval_method) as task_manager:
     with DistributedRabbitMQ(eval_method, is_master=is_master) as task_manager:
         if not is_master:
+            print("About to call task_manager.start_worker!", flush=True)
             task_manager.start_worker()
         else:
             print("Creating population",flush=True)
@@ -94,6 +96,7 @@ if __name__ == '__main__':
                  total_frames += metadata['total_frames']
                  print(metadata,flush=True)
                  print("Average total fps: ", total_training_frames / (time.time() - start), flush=True)
+                 print(datetime.datetime.now(), flush=True)
                  # most of the time, next_generation will be an empty list.
                  next_generation = population.add_grownup(individual)
                  if individual.fitness >= target_fitness:
@@ -117,7 +120,7 @@ if __name__ == '__main__':
                  for child in next_generation:
                      task_manager.add_task(child)
 
-    render_eval = NTimes('CartPole-v1', times=1, render_mode='human')
+    render_eval = NTimes(env_id, times=1, render_mode='human')
     render_eval.eval(individual.dna)
 
 

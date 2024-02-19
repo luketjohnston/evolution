@@ -1,9 +1,15 @@
 # syntax=docker/dockerfile:1
 FROM python:3.11.8-bookworm
 WORKDIR /genetic
-COPY requirements.txt requirements.txt
+COPY requirements2.txt requirements2.txt
+#COPY requirements-torch.txt requirements-torch.txt
 #RUN pip install --no-cache-dir "gymnasium[accept-rom-license]" && \
 # Make sure there is only one RUN command so we only make one layer,
 # and need --no-cache-dir to make it as small as possible
-RUN  pip install --no-cache-dir -r requirements.txt
+RUN  pip install --upgrade pip && \
+     pip install --no-cache-dir -r requirements2.txt
+#RUN  pip install --no-cache-dir autorom && \
+#  AutoROM --accept-license && \
+#  pip install --no-cache-dir -r requirements2.txt
+#RUN pip3 install torch --index-url https://download.pytorch.org/whl/cpu
 COPY ./code .

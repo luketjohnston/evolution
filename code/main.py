@@ -45,7 +45,6 @@ if __name__ == '__main__':
     os.makedirs('saves',exist_ok=True)
 
 
-    population_size = 1000
     num_elites = 1
     parent_population_size = 20 # taken from GA paper for atari
     child_population_size = 1000 # taken from GA paper for atari

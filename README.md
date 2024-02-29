@@ -1,3 +1,5 @@
+This is a work in progress. 
+
 Reproduction of the paper "Deep Neuroevolution: Genetic Algorithms are a Competitive 
 Alternative for Training Deep Neural Networks for Reinforcement Learning."
 https://arxiv.org/pdf/1712.06567.pdf
@@ -43,4 +45,4 @@ In this graph the x-axis generation and the y-axis is the total environment fram
 
 
 This is costing me about $15 a day, I probably should work on bringing that down more, it adds up
-fast!
+fast! (This is with 10 c7a.medium spot instances.)

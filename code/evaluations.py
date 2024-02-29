@@ -1,4 +1,5 @@
 from common import Individual
+import torch
 from policies import LinearPolicy, ConvPolicy
 from abc import ABC, abstractmethod
 import time
@@ -17,7 +18,7 @@ class EvaluationMethod(ABC):
 from functools import reduce
 def flattened_shape(shape):
     return reduce(lambda x,y: x*y, shape, 1)  # compute product
-    
+
 
 class NTimes(EvaluationMethod):
     def __init__(self, env_id, policy_network_class, times=1, render_mode=None):
@@ -83,3 +84,64 @@ class NTimes(EvaluationMethod):
         return Individual(dna, total_reward / self.times), metadata
 
 EvaluationMethod.register(NTimes)
+
+class MemorizationDataset(EvaluationMethod):
+    def __init__(self, input_dims, num_classes, batch_size, num_datapoints, val_frac, sigma):
+
+        self.sigma = sigma
+        self.input_dims = input_dims
+        self.num_classes = num_classes
+        self.batch_size =  batch_size
+        self.val_frac = val_frac
+        self.num_batches = num_datapoints // batch_size
+
+        self.dataloader  = RandomDataloader(input_dims, num_classes, self.num_batches, batch_size)
+
+    def eval(self, dna):
+
+        kernels = [8,4,3]
+        channels = [3,32,64,64]
+        strides = [4,2,1]
+        hidden_size = 512
+
+        policy_network = ConvPolicy(dna, self.input_dims, kernels, channels, strides, self.num_classes, hidden_size, sigma=self.sigma)
+
+        num_train_batches = int(self.num_batches * (1 - self.val_frac))
+        num_val_batches = self.num_batches - num_train_batches 
+        train_loss = 0
+        val_loss = 0
+
+        for i,(x,y) in enumerate(self.dataloader):
+            r = policy_network(x)
+            loss = torch.nn.functional.cross_entropy(r, y)
+            if i < num_train_batches:
+                train_loss += loss / num_train_batches
+            else:
+                val_loss += loss / num_val_batches
+
+        metadata = {
+            'train_loss': train_loss,
+            'val_loss': val_loss,
+            'total_frames': num_train_batches * self.batch_size,
+            }       
+        return Individual(dna, -1*train_loss), metadata
+
+        
+
+
+# Can only iterate through this dataloader ONCE
+class RandomDataloader():
+    def __init__(self, input_dims, num_classes, num_batches, batch_size):
+        self.num_classes = num_classes
+        self.batch_size = batch_size
+        self.input_dims = input_dims
+        self.num_batches = num_batches
+        self.total_datapoints = batch_size * num_batches
+
+
+    def __iter__(self):
+        # Can't make generator in constructor since torch.generator cannot be pickled 
+        generator = torch.Generator()
+        generator.manual_seed(0)
+        for i in range(self.num_batches):
+            yield [torch.randn([self.batch_size, *self.input_dims], generator=generator), torch.randint(high=self.num_classes, size=[self.batch_size], generator=generator)]

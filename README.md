@@ -14,12 +14,18 @@ to the cluster.
 
 
 
-Current status 2/20/24: 
-Spot instance training is working, currently running Atari FrostBite-v5
-on 10 spot instance workers with a population size of 128 and parent pop size of 32.
-(Note this is different from the paper's 1000x20). Currently have ran ~350 generations
-and the best score is 2430 (averaged over 3 runs, note this also differs from the paper's
-10).
+Current status 2/28/24: 
+First large-ish training learned reasonably well on Frostbite, however since then
+I have made some improvements to network initialization and made the mutation std 
+adjustable. Currently I have a hypothesis that genetic algorithms will struggle to learn
+late in training as each new mutation is highly likely to "overwrite" previously learned
+techniques. I am testing this with "MemorizationDataset" in evaluations.py (just to
+see if the genetic algorithm as I have implemented it now is capable of memorizing 
+completely random datapoints).
+
+
+
+Below are some graphs of my first attempt training Frostbite:
 
 In this graph the x-axis is generation, y-axis is average population score
 ![graph1](images/average.png "Average fitness")

@@ -27,20 +27,25 @@ class DistributedMethod(ABC):
         pass
 
 
-def worker(dna, evaluation_method):
-  worker.queue.put(evaluation_method.eval(dna))
+def worker(dna, eval_method):
+  #print("In worker", flush=True)
+  worker.queue.put(eval_method.eval(dna))
+  #print("In worker done", flush=True)
 
 def worker_initializer(queue):
+    #print("In worker initializer", flush=True)
     worker.queue = queue
+    #print("Done worker initializer", flush=True)
 
 class LocalSynchronous(DistributedMethod):
-    def __init__(self, evaluation_method: EvaluationMethod):
-        self.evaluation_method = evaluation_method
+    def __init__(self, eval_method: EvaluationMethod, is_master=True):
+        assert is_master, 'LocalSynchronous is_master must be True'
+        self.eval_method = eval_method
         self.queue = queue.Queue()
         worker_initializer(self.queue)
 
     def add_task(self, dna):
-        worker(dna, self.evaluation_method)
+        worker(dna, self.eval_method)
 
     def get_task_results(self):
         while True:
@@ -58,14 +63,17 @@ class LocalMultithreaded(DistributedMethod):
         ...
     so that python garbage collector can close correctly
     '''
-    def __init__(self, pool_size, evaluation_method: EvaluationMethod):
+    def __init__(self, eval_method: EvaluationMethod, pool_size=None, is_master=True):
+        assert is_master, 'LocalMultithreaded is_master must be True'
         self.queue = mp.Queue()
-        self.evaluation_method = evaluation_method
+        self.eval_method = eval_method
         self.pool = mp.Pool(pool_size, initializer=worker_initializer, initargs=(self.queue,))
 
     def add_task(self, dna):
 
-        self.pool.apply_async(worker, (dna, self.evaluation_method))
+        #print("Applying async", flush=True)
+        self.pool.apply_async(worker, (dna, self.eval_method))
+        #print("Done applying async", flush=True)
 
     def get_task_results(self):
         while True:
@@ -82,7 +90,7 @@ class LocalMultithreaded(DistributedMethod):
 DistributedMethod.register(LocalMultithreaded)
 
 class DistributedRabbitMQ(DistributedMethod):
-    def __init__(self, evaluation_method: EvaluationMethod, is_master=True):
+    def __init__(self, eval_method: EvaluationMethod, is_master=True):
         # don't do anything with the evaluation method - will have to setup workers elsewhere
         print("Connecting to rabbitmq...", flush=True)
         while True: # Have to retry until rabbitmq service is up, TODO clean up
@@ -98,7 +106,7 @@ class DistributedRabbitMQ(DistributedMethod):
         self.channel.queue_declare(queue='results_queue', durable=True)
         self.results_queue = queue.Queue()
         self.is_master = is_master
-        self.eval_method = evaluation_method
+        self.eval_method = eval_method
 
     def add_task(self, dna):
         assert self.is_master

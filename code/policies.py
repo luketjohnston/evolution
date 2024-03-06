@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import math
 import torch
 import time
+from codes import BasicDNA # TODO shouldnt have to do this
 
 class PolicyNetwork(ABC):
     @abstractmethod
@@ -40,15 +41,13 @@ class LinearPolicy:
 PolicyNetwork.register(LinearPolicy)
 
 
-def calc_std(in_fan, out_fan, gain):
-   ''' 'gain' should be root(2) for ReLU '''
-
 class ConvPolicy(torch.nn.Module):
     def __init__(self, dna, input_dim, kernel_dims, channels, strides, act_dim, hidden_size, initialization_seed=0, sigma=0.002):
         ''' sigma is the variance of mutations (torch.normal(mean=0, std=he_init_std * sigma))
         '''
         super().__init__()
         t1 = time.time()
+        self.kernel_dims = kernel_dims
         self.generator = torch.Generator()
         self.generator.manual_seed(initialization_seed) 
         input_dim = list(input_dim)
@@ -56,14 +55,19 @@ class ConvPolicy(torch.nn.Module):
         self.kernels = []
         self.kernel_biases = []
         self.strides = strides
+        self.dna = BasicDNA([]) # don't set to dna arg yet, will do that with call to self.update_dna(dna) below
+        self.sigma = sigma
+        self.channels = channels
 
+        self.initialization_seed = initialization_seed
+
+        # initialization
         for i,k in enumerate(kernel_dims):
             std = 2 / math.sqrt(kernel_dims[i] * kernel_dims[i] * channels[i]) # He initialization
             self.kernels.append(torch.normal(mean=0, std=std, size=(channels[i+1], channels[i], k, k), generator=self.generator))
             self.kernel_biases.append(torch.zeros(channels[i+1]))
             input_dim[0] = math.floor((input_dim[0] - kernel_dims[i]) / self.strides[i] + 1) # TODO verify correct?
             input_dim[1] = math.floor((input_dim[1] - kernel_dims[i]) / self.strides[i] + 1) # TODO verify correct?
-
        
         std = 2 / math.sqrt(input_dim[0] * input_dim[1] * channels[-1])
         self.l1 = torch.normal(mean=0, std=std, size=(input_dim[0] * input_dim[1] * channels[-1], hidden_size), generator=self.generator)
@@ -72,21 +76,8 @@ class ConvPolicy(torch.nn.Module):
         self.l2 = torch.normal(mean=0, std=std, size=(hidden_size, act_dim), generator=self.generator)
         self.l2_bias = torch.zeros(act_dim)
 
-        # recompute ("birth") the new policy network from the dna 
-        for s in dna.seeds:
-            # TODO should std be something different? For initializing networks?
-            self.generator.manual_seed(s)
-            for i in range(len(self.kernels)):
-                # TODO should we actually scale by He init std here?
-                std = 2 / math.sqrt(kernel_dims[i] * kernel_dims[i] * channels[i]) # He initialization
-                self.kernels[i] += torch.normal(mean=0, std=std*sigma, size=self.kernels[i].shape, generator=self.generator)
-                # TODO IMPORTANT if we keep biases in here, we have to actually use them...
+        self.update_dna(dna)
 
-            
-            std = 2 / math.sqrt(self.l1.shape[0])
-            self.l1 += torch.normal(mean=0, std=std * sigma, size=self.l1.shape, generator=self.generator)
-            std = 2 / math.sqrt(self.l2.shape[0])
-            self.l2 += torch.normal(mean=0, std=std * sigma, size=self.l2.shape, generator=self.generator)
 
         t2 = time.time()
         self.metadata = {
@@ -94,40 +85,66 @@ class ConvPolicy(torch.nn.Module):
         }
 
         # register some parameters so we can try gradient descent instead of GA, for SCIENCE!
-        self.l1 = torch.nn.Parameter(self.l1)
-        self.l1_bias = torch.nn.Parameter(self.l1_bias)
-        self.l2 = torch.nn.Parameter(self.l2)
-        self.l2_bias = torch.nn.Parameter(self.l2_bias)
-        self.kernels = [torch.nn.Parameter(k) for k in self.kernels]
-        self.kernel_biases = [torch.nn.Parameter(k) for k in self.kernel_biases]
+        # TODO are we still using this?
+        #self.l1 = torch.nn.Parameter(self.l1)
+        #self.l1_bias = torch.nn.Parameter(self.l1_bias)
+        #self.l2 = torch.nn.Parameter(self.l2)
+        #self.l2_bias = torch.nn.Parameter(self.l2_bias)
+        #self.kernels = [torch.nn.Parameter(k) for k in self.kernels]
+        #self.kernel_biases = [torch.nn.Parameter(k) for k in self.kernel_biases]
 
+
+    def update_dna(self, new_dna):
+        ''' used to update the policy with a new dna. 
+        Mutates intelligently in that we only perform the minimum modifications to convert
+        the old network into the new one (to speed up policy creation time).
+        '''
+        # TODO: right now the network initialization is not encoded in the DNA, counterintuitive...
+        current_seeds = set(self.dna.seeds)
+        new_seeds = set(new_dna.seeds)
+
+        for s in set(new_dna.seeds + self.dna.seeds):
+            if s in current_seeds and s in new_seeds:
+                continue # do nothing, this mutation is cached
+            elif s in current_seeds and not s in new_seeds:
+                sign = -1
+            elif s not in current_seeds and s in new_seeds:
+                sign = 1
+
+            self.generator.manual_seed(s)
+            for i in range(len(self.kernels)):
+                # TODO should we actually scale by He init std here?
+                std = 2 / math.sqrt(self.kernel_dims[i] * self.kernel_dims[i] * self.channels[i]) # He initialization
+                self.kernels[i] += sign * torch.normal(mean=0, std=std*self.sigma, size=self.kernels[i].shape, generator=self.generator)
+                # TODO IMPORTANT if we keep biases in here, we have to actually use them...
+
+            
+            std = 2 / math.sqrt(self.l1.shape[0])
+            self.l1 += sign * torch.normal(mean=0, std=std * self.sigma, size=self.l1.shape, generator=self.generator)
+            std = 2 / math.sqrt(self.l2.shape[0])
+            self.l2 += sign * torch.normal(mean=0, std=std * self.sigma, size=self.l2.shape, generator=self.generator)
+        self.dna = new_dna
+        return self
 
     def __call__(self, state):
         state = torch.tensor(state).float()
-        #print(f"Calling policy with state.shape: {state.shape}")
         batch_size = state.shape[0]
         if len(state.shape) < 4: # add batch dimension if necessary
             state = torch.unsqueeze(state, 0)
             batch_size = state.shape[0]
-        #print(f"state shape: {state.shape}")
            
         state = torch.permute(state, [0,3,1,2])
-        #print(f"state shape: {state.shape}")
         for i,k in enumerate(self.kernels):
             state = torch.nn.functional.conv2d(state, k, stride=self.strides[i]) # TODO do I need bias for the kernels?
-            #print(f"conv {i} state shape: {state.shape}")
             state = state + self.kernel_biases[i][None, :, None, None] # TODO does this broadcast correctly?
             state = torch.nn.functional.relu(state)
 
   
         state = state.reshape([batch_size, -1]) # flatten
-        #print(f"state shape after reshape: {state.shape}")
         state = torch.nn.functional.relu(torch.matmul(state, self.l1))
         state = state + self.l1_bias
-        #print(f"state shape before logits matmul: {state.shape}")
         logits = torch.matmul(state, self.l2)
         logits = logits + self.l2_bias
-        #print(f"logits shape: {logits.shape}")
         return logits
 
     def act(self, state):
@@ -162,25 +179,19 @@ class ConvModule(torch.nn.Module):
 
     def __call__(self, state):
         state = torch.tensor(state).float()
-        #print(f"Calling policy with state.shape: {state.shape}")
         batch_size = state.shape[0]
         if len(state.shape) < 4: # add batch dimension if necessary
             state = torch.unsqueeze(state, 0)
             batch_size = state.shape[0]
-        #print(f"state shape: {state.shape}")
            
         state = torch.permute(state, [0,3,1,2])
-        #print(f"state shape: {state.shape}")
         for i,k in enumerate(self.kernels):
             state = k(state) # TODO do I need bias for the kernels?
             state = torch.nn.functional.relu(state)
 
   
         state = state.reshape([batch_size, -1]) # flatten
-        #print(f"state shape after reshape: {state.shape}")
         state = torch.nn.functional.relu(self.l1(state))
-        #print(f"state shape before logits matmul: {state.shape}")
         logits = self.l2(state)
-        #print(f"logits shape: {logits.shape}")
         return logits
         

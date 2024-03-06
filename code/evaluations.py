@@ -102,14 +102,17 @@ class MemorizationDataset(EvaluationMethod):
         self.loss_type = loss_type
         assert loss_type in ['num_incorrect', 'cross_entropy']
 
-    def eval(self, dna):
+    def eval(self, dna, cached_policy=None):
 
         kernels = [8,4,3]
         channels = [3,32,64,64]
         strides = [4,2,1]
         hidden_size = 512
 
-        policy_network = ConvPolicy(dna, self.input_dims, kernels, channels, strides, self.num_classes, hidden_size, sigma=self.sigma)
+        if cached_policy:
+            policy_network = cached_policy.update_dna(dna)
+        else:
+            policy_network = ConvPolicy(dna, self.input_dims, kernels, channels, strides, self.num_classes, hidden_size, sigma=self.sigma)
 
         train_loss = 0
         val_loss = 0
@@ -140,7 +143,7 @@ class MemorizationDataset(EvaluationMethod):
             'total_frames': self.num_train_batches * self.batch_size,
             'policy_make_time': policy_network.metadata['policy_make_time'],
             }       
-        return Individual(dna, -1*train_loss.item()), metadata
+        return (Individual(dna, -1*train_loss.item()), metadata), policy_network
 
         
 

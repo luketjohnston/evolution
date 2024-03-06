@@ -69,14 +69,14 @@ config['eval_method'] = MemorizationDataset(
 def make_configs():
     configs = []
     for child_population_size in [64]:
-        for parent_population_size in [16]:
-            for sigma in [0.05]:
+        for parent_population_size in [32]:
+            for sigma in [0.02]:
                 config = {
                   'num_elites':  1,
                   'parent_population_size': parent_population_size,
                   'child_population_size': child_population_size,
-                  'save_prefix': f'mem-argmax-parent{parent_population_size}-child{child_population_size}-sigma{sigma}',
-                  #'save_prefix': f'quicktest',
+                  'save_prefix': f'memfast-parent{parent_population_size}-child{child_population_size}-sigma{sigma}',
+                  #'save_prefix': f'quicktest2',
                   #'distributed_class': LocalSynchronous,
                   'max_generation': 500,
                   'distributed_class': LocalMultithreaded,
@@ -89,7 +89,7 @@ def make_configs():
                         num_train_datapoints=64,
                         num_val_datapoints=32,
                         sigma=sigma,
-                        loss_type='num_incorrect')
+                        loss_type='cross_entropy')
                         
                 configs.append(config)
     return configs

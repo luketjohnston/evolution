@@ -28,14 +28,13 @@ class DistributedMethod(ABC):
 
 
 def worker(dna, eval_method):
-  #print("In worker", flush=True)
-  worker.queue.put(eval_method.eval(dna))
-  #print("In worker done", flush=True)
+  eval_result, policy_network = eval_method.eval(dna, cached_policy=worker.cached_policy)
+  worker.cached_policy = policy_network
+  worker.queue.put(eval_result)
 
 def worker_initializer(queue):
-    #print("In worker initializer", flush=True)
     worker.queue = queue
-    #print("Done worker initializer", flush=True)
+    worker.cached_policy = None
 
 class LocalSynchronous(DistributedMethod):
     def __init__(self, eval_method: EvaluationMethod, is_master=True):

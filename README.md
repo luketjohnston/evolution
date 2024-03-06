@@ -16,14 +16,22 @@ to the cluster.
 
 
 
-Current status 2/28/24: 
+Current status 3/5/24: 
 First large-ish training learned reasonably well on Frostbite, however since then
-I have made some improvements to network initialization and made the mutation std 
-adjustable. Currently I have a hypothesis that genetic algorithms will struggle to learn
-late in training as each new mutation is highly likely to "overwrite" previously learned
-techniques. I am testing this with "MemorizationDataset" in evaluations.py (just to
-see if the genetic algorithm as I have implemented it now is capable of memorizing 
-completely random datapoints).
+I have decided to take some time exploring GA hyperparameters on a very simple toy problem,
+and comparing to backpropogation. The toy problem is memorizing a dataset of images of random 
+gaussian noise, with random labels of 10 classes. For 64 datapoints, SGD gets to 1e-5 loss
+on training dataset in approximately 100 optimization steps. Results so far on GA show that
+a convergence is faster with a small number of parents (2 vs 8 vs 64), and while increasing the
+children in each generation does result in faster convergence by generation, it hurts wall time.
+Also, using sigma=0.02 was the best of [0.08,0.04,0.02,0.01,0.005,0.002]. 
+Now I want to try to see how GA performs when there is no exact gradient - the loss will just be
+the number of incorrect classes (using argmax)
+
+![memorization graph](images/memorization_toy.png "Memorization toy problem, GA experiments")
+
+![parent-mem-graph](images/mem-parent.png "Memorization toy problem, GA experiments, vary number of parents")
+
 
 
 

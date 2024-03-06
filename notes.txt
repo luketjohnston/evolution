@@ -1,3 +1,46 @@
+IMPORTANT: make sure GA handles biases correctly
+
+Current best idea:
+test the hypothesis that GA mutations interfere with previous knowledge by memorizing 
+some random dataset.
+
+With these params:
+input_dims = [64,64,3]
+num_classes = 10
+batch_size = 32
+num_train_datapoints = 16 * batch_size
+num_val_datapoints = 2 * batch_size
+kernels = [8,4,3]
+channels = [3,32,64,64]
+strides = [4,2,1]
+hidden_size = 512
+adam gets to 1e-5 within ~100 epochs on MemorizationDataset
+
+
+Hypothesis:
+randomly mutating the entire network every time makes it difficult to develop complicated machinery,
+since as we build up skills, every mutation has a chance of interfering with all previously built up 
+skills.
+We need a way for mutations on average to be benign, or at least a way for mutations to not
+"overwrite" whatever skills we already have
+Rapidfire brainstorming::
+-Mutations apply to only one layer (skip connections)
+-mutations add layers one at a time
+-mutations add separate models that are ensembled together
+-there is an attention layer of some kind that can attend to different mutation layers
+-Setup the random weights such that layers on average make small changes
+-each mutation is a totally separate model that additionally outputs an "importance" 
+channel, and at every step we use the model that outputs the highest importance. This last one
+feels somewhat physical, we have all these different desires and they often compete, and presumably
+the most pressing one wins. The alternative idea is the central system has its own coherent 
+narrative that it takes into account all subsystems and then choses.
+Some problems:
+1. how do we mutate the final layer?
+
+
+TODO: investigate whether environment random seed matters for evaluations etc. 
+Seems like everytime I eval I get the same result?
+
 Roms are installed: /Users/luke/Library/Python/3.9/lib/python/site-packages/AutoROM/roms
 
 
@@ -13,3 +56,106 @@ So if we train on every 4th frame, make sure we are incrementing frame count by 
 step. Not sure if I am doing this right now.
 
 TODO: havent figured out how to connect to rabbitmq UI
+
+
+52.52 was the last price before I stopped everything
+
+
+Things to think about
+1. indirect encoding - how can we ensure that beneficial mutations are re-used everywhere they are applicable
+in the network etc?
+2. Sexual selection - how can agents choose their mates?
+3. Diversity - how can we enforce some diversity constraints?
+   --- there may be a way to enforce this by un-enforcing the opposite - 
+   organism that are too non-diverse die out
+4. think about global competition - in real life, organism succeed by finding NEW niches, not by
+dominating an existing one (diversifying). one idea is to compete *locally*, vs only similar solutions
+
+
+
+
+The current network is 3 convolutions with channels 32,64,64
+and strides 4,2,1
+and then a MLP.
+
+Suppose that our model consists of multiple sub-components, which can evolve independently, but which
+are ensembled together at the end in some manner. 
+How are we to ensemble them together?
+Three possibilities I can think of so far:
+1. each model outputs an action directly, and these actions are ensembled somehow
+2. each model outputs only a state, which is ensembled somehow into an action by a final layer
+   that itself must evolve independently (or possible is fixed in some way)
+3. Each model outputs both a action AND a state, but somehow we use both or only the state.
+
+Another idea: I could evolve to a different objective (modeling the environment, for example), and
+then setup different components myself to each evolve (rather than requiring the multiple components to 
+evolve to their individual tasks from scratch)
+   - then 
+
+The "final layer" must be something constant, that inherently is able to "attend" to the ensemble.
+Then we can evolve each ensemble
+
+Alright here we go:
+There are evolved state representations and evolved reward functions, and a meta-controller.
+State representations and reward functions are fixed for a given agent.
+An agent is trained on multiple episodes, during which the meta-controller learns to use the state
+representations to maximize reward. Meta-controller could be for example an RL loop
+
+
+
+This is all too complicated. The hypothesis that I actually want to test is 
+1. do genetic algorithms as they currently exist reach a "diminishing returns" point whereby further mutations
+   interfere with previous learnings.
+
+
+Current issue is that each generation takes successively longer to inialize the policy. 
+This is a bottleneck for the memorization dataset, it may not be the bottleneck for a larger task 
+(at generation 500 it takes 2 minutes to initialize the policy). No matter how many workers we scale up
+to, whatever percent of the work-time it takes to initialize the policy will always take up that same
+amount of resources (money or time). Possible solutions:
+1. try to speed up the initialization process somehow
+   - paper solution: pre-generate random matrix which we then index into? I'm not sure how this would be faster
+2. try to prevent full re-initialization when possible? 
+   - each worker can cache some set of networks, and then only has to update the network with just the new mutation.
+     -- difficulty: how much space do networks take? can we store multiple on a worker?
+     -- maybe we don't have to, if the master thread can organize the tasks so that workers usually receive 
+        individuals that they already have cached. Seems tricky
+3. change the way in which networks mutate, to be faster.
+   - instead of mutating entire network, mutate one layer? reduces time by factor of (network depth). can we do this without
+   increasing total generations required (or possibly even decreasing it?)
+
+
+Random (not really related) thought: What if where was a way to enforce a standard ordering on network parameters?
+For example, order nodes by sum of incoming weights or something like that. Would this make it easier to mutate
+parameters one layer at a time?
+- there are ways, see Keller's paper and git re-basin. They all require some computation though.
+
+
+Observation:
+When we learn the no-grad memorization task, if we simply use the optimal settings for the normal 
+memorization task (1 parent sigma 0.02 child 16), learning barely progresses at all. Increasing sigma
+alone doesn't fix the problem, learning halts at around 21. However if we increase the number of parents
+(and children) to 8(32), then learning continues to 15 at generation 500.
+Hypothesis:
+Something about this setup incentivizes parents to become robust to mutation with respect to the 
+information they have already learned. Children of the parent that reproduces the highest average fitness
+will be the most likely to populate the next generation. This means that parents that are "robust"
+to mutation with respect to whatever they have already learned will be more likely to persist. However,
+there is no incentive for them to develop robustness to mutation in generall - only robustness with
+respect to the datapoints they have already memorized. So mutations will be able to continue
+exploring new ground without overwriting previous accomplishments.
+
+
+
+Possible next steps:
+1. experiment with different architectures+mutation schemes, to find one that can solve the nograd memorization
+problem quickly. A simple idea is just a NN thing where we mutate the 10 reference points, for example. 
+2. update network mutations so that network can be constructed faster. This will allow us to run long experiments
+quicker.
+ -- this should be relatively straightforward with some kind of network caching. Mutations are additive, so we
+ can just look at the different between the cached network dna and the new dna to modify the old network accordingly.
+3. run a bunch more experiments to see if the current setup can actually solve the nograd memorization problem
+with some set of parameters
+4. try to falsify our hypothesis that multiple parents allow multi-generation selection effects where 
+chromosomes that are robust to mutation with respect to the current fitness level are more likely to survive
+and propogate

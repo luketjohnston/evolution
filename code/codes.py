@@ -19,7 +19,6 @@ class BasicDNA:
     ''' 
     Simple genetic code, simply a list of random seeds which will be used
     to generate the policy network (the initial network and then the perturbations).
-    TODO move to codes.py
     '''
     def __init__(self, random_seed):
         self.seeds = [random_seed]

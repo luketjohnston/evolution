@@ -35,6 +35,7 @@ config = {
 config['eval_method'] = NTimes(config['env_id'], policy_network_class=ConvPolicy, times=)
 """
 
+configs = []
 
 
 
@@ -45,17 +46,53 @@ config = {
   #'parent_population_size': 2,
   'child_population_size': 128,
   #'child_population_size': 4,
-  'save_prefix': 'mem-e1-p32-c128-d1028',
-  #'distributed_class': LocalSynchronous,
-  'distributed_class': LocalMultithreaded,
+  'save_prefix': 'mem-e1-p32-c128-td64-s0p01',
+  #'save_prefix': 'quicktest2',
+  #'save_prefix': 'quicktest',
+  'distributed_class': LocalSynchronous,
+  'max_generation': 200,
+  #'distributed_class': LocalMultithreaded,
 }
 config['eval_method'] = MemorizationDataset(
         input_dims=[64,64,3], 
         num_classes=10, 
         batch_size=32,
-        num_datapoints=1028,
-        val_frac=0.1,
-        sigma=0.002)
+        #num_train_datapoints=512,
+        num_train_datapoints=64,
+        num_val_datapoints=32,
+        sigma=0.01)
+
+
 #config['eval_method'] = NTimes('ALE/Frostbite-v5', policy_network_class=ConvPolicy, times=1)
 
 
+def make_configs():
+    configs = []
+    for child_population_size in [64]:
+        for parent_population_size in [16]:
+            for sigma in [0.05]:
+                config = {
+                  'num_elites':  1,
+                  'parent_population_size': parent_population_size,
+                  'child_population_size': child_population_size,
+                  'save_prefix': f'mem-argmax-parent{parent_population_size}-child{child_population_size}-sigma{sigma}',
+                  #'save_prefix': f'quicktest',
+                  #'distributed_class': LocalSynchronous,
+                  'max_generation': 500,
+                  'distributed_class': LocalMultithreaded,
+                }
+                config['eval_method'] = MemorizationDataset(
+                        input_dims=[64,64,3], 
+                        num_classes=10, 
+                        batch_size=32,
+                        #num_train_datapoints=512,
+                        num_train_datapoints=64,
+                        num_val_datapoints=32,
+                        sigma=sigma,
+                        loss_type='num_incorrect')
+                        
+                configs.append(config)
+    return configs
+            
+            
+            #adam gets to 1e-5 within ~100 epochs on MemorizationDataset

@@ -1,4 +1,5 @@
 from common import Individual
+import random
 import torch
 from policies import LinearPolicy, ConvPolicy
 from abc import ABC, abstractmethod
@@ -86,16 +87,20 @@ class NTimes(EvaluationMethod):
 EvaluationMethod.register(NTimes)
 
 class MemorizationDataset(EvaluationMethod):
-    def __init__(self, input_dims, num_classes, batch_size, num_datapoints, val_frac, sigma):
+    def __init__(self, input_dims, num_classes, batch_size, num_train_datapoints, num_val_datapoints, sigma, loss_type='num_incorrect'):
 
         self.sigma = sigma
         self.input_dims = input_dims
         self.num_classes = num_classes
         self.batch_size =  batch_size
-        self.val_frac = val_frac
-        self.num_batches = num_datapoints // batch_size
 
-        self.dataloader  = RandomDataloader(input_dims, num_classes, self.num_batches, batch_size)
+        self.num_train_batches = num_train_datapoints // batch_size
+        self.num_val_batches = num_val_datapoints // batch_size
+
+        self.train_dataloader  = RandomDataloader(input_dims, num_classes, num_train_datapoints, batch_size)
+        self.val_dataloader  = RandomDataloader(input_dims, num_classes, num_val_datapoints, batch_size)
+        self.loss_type = loss_type
+        assert loss_type in ['num_incorrect', 'cross_entropy']
 
     def eval(self, dna):
 
@@ -106,31 +111,78 @@ class MemorizationDataset(EvaluationMethod):
 
         policy_network = ConvPolicy(dna, self.input_dims, kernels, channels, strides, self.num_classes, hidden_size, sigma=self.sigma)
 
-        num_train_batches = int(self.num_batches * (1 - self.val_frac))
-        num_val_batches = self.num_batches - num_train_batches 
         train_loss = 0
         val_loss = 0
 
-        for i,(x,y) in enumerate(self.dataloader):
+        for i,(x,y) in enumerate(self.train_dataloader):
+            #print(f'i: {i}, x: {x}, y: {y}')
             r = policy_network(x)
-            loss = torch.nn.functional.cross_entropy(r, y)
-            if i < num_train_batches:
-                train_loss += loss / num_train_batches
-            else:
-                val_loss += loss / num_val_batches
+            if self.loss_type == 'cross_entropy':
+                loss = torch.nn.functional.cross_entropy(r, y)
+            elif self.loss_type == 'num_incorrect':
+                #print('r:', r)
+                #print('argmax:', torch.argmax(r, dim=1))
+                #print('y:', y)
+                loss = torch.sum(torch.ne(torch.argmax(r, dim=1), y))
+            train_loss += loss / self.num_train_batches
+
+        for i,(x,y) in enumerate(self.val_dataloader):
+            r = policy_network(x)
+            if self.loss_type == 'cross_entropy':
+                loss = torch.nn.functional.cross_entropy(r, y)
+            elif self.loss_type == 'num_incorrect':
+                loss = torch.sum(torch.ne(torch.argmax(r, dim=1), y))
+            val_loss += loss / self.num_val_batches
 
         metadata = {
-            'train_loss': train_loss,
-            'val_loss': val_loss,
-            'total_frames': num_train_batches * self.batch_size,
+            'train_loss': train_loss.item(),
+            'val_loss': val_loss.item(),
+            'total_frames': self.num_train_batches * self.batch_size,
+            'policy_make_time': policy_network.metadata['policy_make_time'],
             }       
-        return Individual(dna, -1*train_loss), metadata
+        return Individual(dna, -1*train_loss.item()), metadata
 
         
 
 
-# Can only iterate through this dataloader ONCE
 class RandomDataloader():
+    def __init__(self, input_dims, num_classes, num_datapoints, batch_size, seed=0, shuffle=False):
+        self.num_classes = num_classes
+        self.batch_size = batch_size
+        self.input_dims = input_dims
+        self.num_batches = num_datapoints // batch_size
+        self.total_datapoints = num_datapoints
+        self.shuffle = shuffle
+        self.seed = seed
+
+
+    def __iter__(self):
+        # Can't make generator in constructor since torch.generator cannot be pickled 
+        #print("Making dataloader")
+        generator = torch.Generator()
+        generator.manual_seed(self.seed)
+        if not self.shuffle:
+            for i in range(self.num_batches):
+                yield [torch.randn([self.batch_size, *self.input_dims], generator=generator), torch.randint(high=self.num_classes, size=[self.batch_size], generator=generator)]
+        else:
+            xl = []
+            yl = []
+            for i in range(self.num_batches):
+                xl.append(torch.randn([self.batch_size, *self.input_dims], generator=generator))
+                yl.append(torch.randint(high=self.num_classes, size=[self.batch_size], generator=generator))
+            xl = torch.cat(xl, dim=0)
+            yl = torch.cat(yl, dim=0)
+            indices = torch.randperm(xl.shape[0])
+            #print("Done")
+            for i in range(self.num_batches):
+             
+                x = xl[indices[i*self.batch_size:i*self.batch_size + self.batch_size]]
+                y = yl[indices[i*self.batch_size:i*self.batch_size + self.batch_size]]
+                yield [x,y]
+            
+
+
+class DumbDataloader():
     def __init__(self, input_dims, num_classes, num_batches, batch_size):
         self.num_classes = num_classes
         self.batch_size = batch_size
@@ -141,7 +193,7 @@ class RandomDataloader():
 
     def __iter__(self):
         # Can't make generator in constructor since torch.generator cannot be pickled 
-        generator = torch.Generator()
-        generator.manual_seed(0)
         for i in range(self.num_batches):
-            yield [torch.randn([self.batch_size, *self.input_dims], generator=generator), torch.randint(high=self.num_classes, size=[self.batch_size], generator=generator)]
+            labels = torch.arange(self.batch_size) % self.num_classes
+            datapoints = labels[:,None,None,None] * torch.ones([1, *self.input_dims])
+            yield [datapoints, labels]

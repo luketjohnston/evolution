@@ -87,12 +87,13 @@ class NTimes(EvaluationMethod):
 EvaluationMethod.register(NTimes)
 
 class MemorizationDataset(EvaluationMethod):
-    def __init__(self, input_dims, num_classes, batch_size, num_train_datapoints, num_val_datapoints, sigma, loss_type='num_incorrect'):
+    def __init__(self, input_dims, num_classes, batch_size, num_train_datapoints, num_val_datapoints, policy_factory, policy_args, loss_type='num_incorrect'):
 
-        self.sigma = sigma
         self.input_dims = input_dims
         self.num_classes = num_classes
         self.batch_size =  batch_size
+        self.policy_args = policy_args
+        self.policy_factory = policy_factory
 
         self.num_train_batches = num_train_datapoints // batch_size
         self.num_val_batches = num_val_datapoints // batch_size
@@ -104,28 +105,19 @@ class MemorizationDataset(EvaluationMethod):
 
     def eval(self, dna, cached_policy=None):
 
-        kernels = [8,4,3]
-        channels = [3,32,64,64]
-        strides = [4,2,1]
-        hidden_size = 512
-
         if cached_policy:
             policy_network = cached_policy.update_dna(dna)
         else:
-            policy_network = ConvPolicy(dna, self.input_dims, kernels, channels, strides, self.num_classes, hidden_size, sigma=self.sigma)
+            policy_network = self.policy_factory(dna, **self.policy_args)
 
         train_loss = 0
         val_loss = 0
 
         for i,(x,y) in enumerate(self.train_dataloader):
-            #print(f'i: {i}, x: {x}, y: {y}')
             r = policy_network(x)
             if self.loss_type == 'cross_entropy':
                 loss = torch.nn.functional.cross_entropy(r, y)
             elif self.loss_type == 'num_incorrect':
-                #print('r:', r)
-                #print('argmax:', torch.argmax(r, dim=1))
-                #print('y:', y)
                 loss = torch.sum(torch.ne(torch.argmax(r, dim=1), y))
             train_loss += loss / self.num_train_batches
 

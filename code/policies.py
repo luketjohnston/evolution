@@ -194,4 +194,79 @@ class ConvModule(torch.nn.Module):
         state = torch.nn.functional.relu(self.l1(state))
         logits = self.l2(state)
         return logits
+
+class MultiConv(torch.nn.Module):
+    ''' MultiConv contains multiple ConvPolicy in parallel. The logit for each class is the max
+    of corresponding class logit for each ConvPolicy. Mutations only apply to one ConvPolicy at a time.
+    The motivation for this is that it will make it less likely for new mutations to override
+    old knowledge.  '''
+    def __init__(self, dna, input_dim, kernel_dims, channels, strides, act_dim, hidden_size, initialization_seed=0, sigma=0.002, multi=4):
+        ''' sigma is the variance of mutations (torch.normal(mean=0, std=he_init_std * sigma))
+        '''
+        super().__init__()
+        t1 = time.time()
+        input_dim = list(input_dim)
+
+        self.strides = strides
+        self.sigma = sigma
+        self.channels = channels
+        self.multi = multi
+
+        self.initialization_seed = initialization_seed
+
+        self.convs = []
+
+        for c in range(multi):
+            c_init_seed = initialization_seed * multi + c
+            print('c init seed:', c_init_seed)
+            start_dna = BasicDNA([])
+            self.convs.append(ConvPolicy(start_dna, input_dim, kernel_dims, channels, strides, act_dim, hidden_size, initialization_seed=c_init_seed, sigma=self.sigma))
+            
+        self.update_dna(dna)
+
+        t2 = time.time()
+        self.metadata = {
+            'policy_make_time': time.time() - t1
+        }
+
+
+    def update_dna(self, new_dna):
+        ''' used to update the policy with a new dna. 
+        Mutates intelligently in that we only perform the minimum modifications to convert
+        the old network into the new one (to speed up policy creation time).
+        '''
+        # TODO: right now the network initialization is not encoded in the DNA, counterintuitive...
+
+        dnas = [[] for _ in range(self.multi)]
+
+        # split up dna so 1/4 of the genes apply to each ConvPolicy
+        for s in new_dna.seeds:
+            dnas[s % self.multi].append(s // self.multi)
+
+        for c,new_dna in zip(self.convs, dnas):
+            c_dna = BasicDNA(new_dna)
+            c.update_dna(c_dna)
+
+        self.dna = new_dna
+        return self
+
+    def __call__(self, state):
+        logitl = []
+        for c in self.convs:
+            logitl.append(c(state))
+
+        logits = torch.stack(logitl)
+        logits = torch.max(logits, dim=0)[0]
+            
+        return logits
+
+    def act(self, state):
+        logits = self(state)
+        probs = torch.nn.functional.softmax(logits, dim=1)
+        action = torch.multinomial(probs, 1)
+        if action.shape[0] == 1: # TODO get rid of this item() logic
+            return action.item()
+        else:
+            return action
         
+PolicyNetwork.register(MultiConv)

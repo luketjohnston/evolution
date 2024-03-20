@@ -1,6 +1,9 @@
 from policies import ConvPolicy, LinearPolicy, MultiConv
 import torch
+from codes import BasicDNA
+from population import Sexual, EliteAsexual
 from evaluations import MemorizationDataset, NTimes
+from common import RandomSeedGenerator
 from distributed import LocalMultithreaded, LocalSynchronous, DistributedRabbitMQ
 
 
@@ -86,10 +89,10 @@ def make_configs():
               'num_elites':  num_elites,
               'parent_population_size': parent_population_size,
               'child_population_size': child_population_size,
-              'save_prefix': f'memfast-multi{multi}-argmax-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}',
+              'save_prefix': f'memfast-sexualv1-argmax-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}',
               #'save_prefix': f'quicktest',
               #'distributed_class': LocalSynchronous,
-              'max_generation': 200000,
+              'max_generation': 10000,
               'distributed_class': LocalMultithreaded,
             }
             config['eval_method'] = MemorizationDataset(
@@ -104,6 +107,14 @@ def make_configs():
                     loss_type='num_incorrect',
                     #loss_type='cross_entropy',
                     )
+            #config['population'] = EliteAsexual(
+            config['population'] = Sexual(
+                        BasicDNA, 
+                        config['parent_population_size'], 
+                        config['child_population_size'],
+                        RandomSeedGenerator(0),
+            #            config['num_elites'],
+                        )
                     
             configs.append(config)
     return configs

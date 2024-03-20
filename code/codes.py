@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import random
 import pickle
 
 class DNA(ABC):
@@ -32,6 +33,19 @@ class BasicDNA:
         seeds = pickle.loads(serialized)
         gc = BasicDNA(seeds)
         return gc
+
+    # simple sexual reproduction, if a gene exists in both parents, pass it on.
+    # Otherwise it has a 50% chance of being passed on.
+    def combine(self, partner_dna):
+        child = BasicDNA([])
+        p1 = set(self.seeds)
+        p2 = set(partner_dna.seeds)
+        for s in p1.union(p2):
+            if s in p1 and s in p2:
+                child.seeds.append(s)
+            elif random.random() > 0.5:
+                child.seeds.append(s)
+        return child
 DNA.register(BasicDNA)
 
 

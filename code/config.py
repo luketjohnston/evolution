@@ -1,4 +1,4 @@
-from policies import ConvPolicy, LinearPolicy, MultiConv
+from policies import ConvPolicy, LinearPolicy, MultiConv, MemorizationModule
 import torch
 from codes import BasicDNA
 from population import Sexual, EliteAsexual
@@ -76,20 +76,26 @@ multi=4
 def multi_conv_factory(dna, sigma):
     return MultiConv(dna, input_dims, kernels, channels, strides, num_classes, hidden_size, initialization_seed, sigma, multi=multi)
 
+memheads=128
+proj_dim=256
+def mem_factory(dna, sigma):
+    return MemorizationModule(dna, input_dims, num_classes, memheads, initialization_seed, sigma=1,proj_dim=proj_dim)
+
 
 num_elites=0
 def make_configs():
     configs = []
     for (child_population_size,parent_population_size) in [(64,16)]:
         #for parent_population_size in [32]:
-        for sigma in [0.05]:
-            num_train_datapoints = 512
+        for sigma in [1.0]:
+            num_train_datapoints = 64
 
             config = {
               'num_elites':  num_elites,
               'parent_population_size': parent_population_size,
               'child_population_size': child_population_size,
-              'save_prefix': f'memfast-sexualv1-argmax-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}',
+              #'save_prefix': f'memfast-sexualv1-argmax-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}',
+              'save_prefix': f'tilldeath3-asexual-memmodule{memheads}-proj{proj_dim}-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}',
               #'save_prefix': f'quicktest',
               #'distributed_class': LocalSynchronous,
               'max_generation': 10000,
@@ -98,13 +104,14 @@ def make_configs():
             config['eval_method'] = MemorizationDataset(
                     input_dims=input_dims, 
                     num_classes=num_classes, 
-                    batch_size=32,
+                    batch_size=min(32, num_train_datapoints //2),
                     #num_train_datapoints=512,
                     num_train_datapoints=num_train_datapoints,
                     num_val_datapoints=32,
-                    policy_factory=conv_factory,
+                    policy_factory=mem_factory,
                     policy_args={'sigma': sigma},
-                    loss_type='num_incorrect',
+                    #loss_type='num_incorrect',
+                    loss_type='num_till_death',
                     #loss_type='cross_entropy',
                     )
             #config['population'] = EliteAsexual(

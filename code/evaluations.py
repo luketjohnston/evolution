@@ -1,4 +1,4 @@
-from common import Individual
+from common import Individual, first_nonzero_index
 import random
 import torch
 from policies import LinearPolicy, ConvPolicy
@@ -88,6 +88,8 @@ EvaluationMethod.register(NTimes)
 
 class MemorizationDataset(EvaluationMethod):
     def __init__(self, input_dims, num_classes, batch_size, num_train_datapoints, num_val_datapoints, policy_factory, policy_args, loss_type='num_incorrect'):
+        self.num_train_datapoints = num_train_datapoints
+        self.num_val_datapoints = num_val_datapoints
 
         self.input_dims = input_dims
         self.num_classes = num_classes
@@ -101,7 +103,7 @@ class MemorizationDataset(EvaluationMethod):
         self.train_dataloader  = RandomDataloader(input_dims, num_classes, num_train_datapoints, batch_size)
         self.val_dataloader  = RandomDataloader(input_dims, num_classes, num_val_datapoints, batch_size)
         self.loss_type = loss_type
-        assert loss_type in ['num_incorrect', 'cross_entropy']
+        assert loss_type in ['num_incorrect', 'cross_entropy', 'num_till_death']
 
     def eval(self, dna, cached_policy=None):
 
@@ -112,22 +114,33 @@ class MemorizationDataset(EvaluationMethod):
 
         train_loss = 0
         val_loss = 0
+        if self.loss_type == 'num_till_death':
+            train_loss += self.num_train_datapoints / self.num_train_batches + 1
+            val_loss += self.num_val_datapoints / self.num_val_batches + 1
 
         for i,(x,y) in enumerate(self.train_dataloader):
             r = policy_network(x)
             if self.loss_type == 'cross_entropy':
-                loss = torch.nn.functional.cross_entropy(r, y)
+                train_loss += torch.nn.functional.cross_entropy(r, y) / self.num_train_batches
             elif self.loss_type == 'num_incorrect':
-                loss = torch.sum(torch.ne(torch.argmax(r, dim=1), y))
-            train_loss += loss / self.num_train_batches
+                train_loss += torch.sum(torch.ne(torch.argmax(r, dim=1), y)) / self.num_train_batches
+            elif self.loss_type == 'num_till_death':
+                incorrect = torch.ne(torch.argmax(r, dim=1), y)
+                train_loss += -1 * first_nonzero_index(incorrect) / self.num_train_batches 
+                if torch.any(incorrect):
+                  break
 
         for i,(x,y) in enumerate(self.val_dataloader):
             r = policy_network(x)
             if self.loss_type == 'cross_entropy':
-                loss = torch.nn.functional.cross_entropy(r, y)
+                val_loss += torch.nn.functional.cross_entropy(r, y) / self.num_train_batches
             elif self.loss_type == 'num_incorrect':
-                loss = torch.sum(torch.ne(torch.argmax(r, dim=1), y))
-            val_loss += loss / self.num_val_batches
+                val_loss += torch.sum(torch.ne(torch.argmax(r, dim=1), y)) / self.num_train_batches
+            elif self.loss_type == 'num_till_death':
+                incorrect = torch.ne(torch.argmax(r, dim=1), y) 
+                val_loss += -1 * first_nonzero_index(incorrect) / self.num_train_batches
+                if torch.any(incorrect):
+                  break
 
         metadata = {
             'train_loss': train_loss.item(),

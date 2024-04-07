@@ -1,4 +1,4 @@
-from policies import ConvPolicy, LinearPolicy, MultiConv, MemorizationModule
+from policies import ConvPolicy, LinearPolicy, MultiConv, MemorizationModule, MemorizationModuleWithLR
 import torch
 from codes import BasicDNA
 from population import Sexual, EliteAsexual
@@ -65,21 +65,24 @@ channels = [3,32,64,64]
 strides = [4,2,1]
 hidden_size = 512
 num_classes = 10
-initialization_seed=0
 
 def conv_factory(dna, sigma):
     return ConvPolicy(dna, input_dims, kernels, channels, strides, num_classes, hidden_size, initialization_seed, sigma)
 
-
 multi=4
+memheads=64
+proj_dim=128
+lr_sigma=0.0
+initialization_seed=3
 
 def multi_conv_factory(dna, sigma):
-    return MultiConv(dna, input_dims, kernels, channels, strides, num_classes, hidden_size, initialization_seed, sigma, multi=multi)
+    return MultiConv(dna, input_dims, kernels, channels, strides, num_classes, hidden_size, initialization_seed=initialization_seed, sigma=sigma, multi=multi)
 
-memheads=128
-proj_dim=256
 def mem_factory(dna, sigma):
-    return MemorizationModule(dna, input_dims, num_classes, memheads, initialization_seed, sigma=1,proj_dim=proj_dim)
+    return MemorizationModule(dna, input_dims, num_classes, memheads, initialization_seed=initialization_seed, sigma=1,proj_dim=proj_dim)
+
+def mem_factory_lr(dna, sigma, lr_sigma):
+    return MemorizationModuleWithLR(dna, input_dims, num_classes, memheads, initialization_seed=initialization_seed, sigma=1,proj_dim=proj_dim, lr_sigma=lr_sigma)
 
 
 num_elites=0
@@ -90,13 +93,17 @@ def make_configs():
         for sigma in [1.0]:
             num_train_datapoints = 64
 
+            loss_type='num_incorrect'
+            #loss_type='num_till_death'
+
             config = {
               'num_elites':  num_elites,
               'parent_population_size': parent_population_size,
               'child_population_size': child_population_size,
               #'save_prefix': f'memfast-sexualv1-argmax-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}',
-              'save_prefix': f'tilldeath3-asexual-memmodule{memheads}-proj{proj_dim}-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}',
-              #'save_prefix': f'quicktest',
+              'save_prefix': f'{loss_type}-asexual-memmodulelr{memheads}-lrsigma{lr_sigma}-proj{proj_dim}-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}-initseeed{initialization_seed}',
+              'save_prefix': f'quicktest',
+              #'save_prefix': f'quick_new_imp2_initseed1',
               #'distributed_class': LocalSynchronous,
               'max_generation': 10000,
               'distributed_class': LocalMultithreaded,
@@ -104,14 +111,15 @@ def make_configs():
             config['eval_method'] = MemorizationDataset(
                     input_dims=input_dims, 
                     num_classes=num_classes, 
-                    batch_size=min(32, num_train_datapoints //2),
+                    batch_size=min(32, num_train_datapoints // 2),
                     #num_train_datapoints=512,
                     num_train_datapoints=num_train_datapoints,
                     num_val_datapoints=32,
-                    policy_factory=mem_factory,
-                    policy_args={'sigma': sigma},
-                    #loss_type='num_incorrect',
-                    loss_type='num_till_death',
+                    #policy_factory=mem_factory,
+                    policy_factory=mem_factory_lr,
+                    policy_args={'sigma': sigma, 'lr_sigma': lr_sigma},
+                    #policy_args={'sigma': sigma},
+                    loss_type=loss_type,
                     #loss_type='cross_entropy',
                     )
             #config['population'] = EliteAsexual(

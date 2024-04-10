@@ -362,38 +362,13 @@ class MemorizationModuleWithLR(MemorizationModule):
         '''
         # TODO: right now the network initialization is not encoded in the DNA, counterintuitive...
 
-        #for i,s in enumerate(new_dna.seeds):
-        #  if i >= len(self.dna.seeds) or s != self.dna.seeds[i]:
-        #    break
+        for j,s in enumerate(new_dna.seeds):
+          if j >= len(self.dna.seeds) or s != self.dna.seeds[j]:
+            break
 
-        ## revert seeds that are no longer included
-        #for i in range(len(self.dna.seeds)-1, i-1, -1):
-        #    s = self.dna.seeds[i]
-        #    memory_i = s % self.memories.shape[0]
-        #    memory_seed = s // self.memories.shape[0]
-        #    self.generator.manual_seed(memory_seed)
-
-        #    noise1 = torch.normal(mean=0, std=1, size=self.memories.shape[1:], generator=self.generator)
-        #    noise2 = torch.normal(mean=0, std=1, size=self.logits.shape[1:], generator=self.generator)
-        #    noise3 = torch.normal(mean=0, std=1, size=self.ln_lrs[memory_i].shape, generator=self.generator)
-
-        #    self.ln_lrs[memory_i] -= self.lr_sigma * noise3 # when reversing we need to do lr first
-        #    self.memories[memory_i] -= self.sigma * noise1 * torch.exp(self.ln_lrs[memory_i])
-        #    self.logits[memory_i] -= self.sigma * noise2 * torch.exp(self.ln_lrs[memory_i])
-        #return self.__init__(new_dna, self.input_dim, self.act_dim, self.heads, self.initialization_seed, self.sigma, self.proj_dim, self.lr_sigma)
-
-        self.generator.manual_seed(self.initialization_seed)  # TODO not used
-        self.logits = torch.zeros([self.heads, self.act_dim])
-        if self.proj_dim:
-            flattened_input_dim = functools.reduce(lambda a,b: a * b,self.input_dim,1)
-            self.random_projection = torch.normal(mean=0,std=1,size=[flattened_input_dim,self.proj_dim],generator=self.generator)
-            self.memories = torch.zeros([self.heads,self.proj_dim])
-        else:
-            self.memories = torch.zeros([self.heads] + list(self.input_dim)) 
-          
-        ## add new seeds
-        #for s in new_dna.seeds[i:]:
-        for s in new_dna.seeds:
+        # revert seeds that are no longer included
+        for i in range(len(self.dna.seeds)-1, j-1, -1):
+            s = self.dna.seeds[i]
             memory_i = s % self.memories.shape[0]
             memory_seed = s // self.memories.shape[0]
             self.generator.manual_seed(memory_seed)
@@ -402,9 +377,74 @@ class MemorizationModuleWithLR(MemorizationModule):
             noise2 = torch.normal(mean=0, std=1, size=self.logits.shape[1:], generator=self.generator)
             noise3 = torch.normal(mean=0, std=1, size=self.ln_lrs[memory_i].shape, generator=self.generator)
 
-            self.memories[memory_i] += self.sigma * noise1 #* torch.exp(self.ln_lrs[memory_i])
-            self.logits[memory_i] += self.sigma * noise2 #* torch.exp(self.ln_lrs[memory_i])
-            #self.ln_lrs[memory_i] += self.lr_sigma * noise3
+            self.ln_lrs[memory_i] -= self.lr_sigma * noise3 # when reversing we need to do lr first
+            self.memories[memory_i] -= self.sigma * noise1 * torch.exp(self.ln_lrs[memory_i])
+            self.logits[memory_i] -= self.sigma * noise2 * torch.exp(self.ln_lrs[memory_i])
+          
+        ## add new seeds
+        #for s in new_dna.seeds:
+        for s in new_dna.seeds[j:]:
+            memory_i = s % self.memories.shape[0]
+            memory_seed = s // self.memories.shape[0]
+            self.generator.manual_seed(memory_seed)
+
+            noise1 = torch.normal(mean=0, std=1, size=self.memories.shape[1:], generator=self.generator)
+            noise2 = torch.normal(mean=0, std=1, size=self.logits.shape[1:], generator=self.generator)
+            noise3 = torch.normal(mean=0, std=1, size=self.ln_lrs[memory_i].shape, generator=self.generator)
+
+            self.memories[memory_i] += self.sigma * noise1 * torch.exp(self.ln_lrs[memory_i])
+            self.logits[memory_i] += self.sigma * noise2 * torch.exp(self.ln_lrs[memory_i])
+            self.ln_lrs[memory_i] += self.lr_sigma * noise3
+
+        self.dna = new_dna
+        return self
+
+class MemorizationModuleWithLRFull(MemorizationModule):
+    def __init__(self, dna, input_dim, act_dim, heads, initialization_seed=0, sigma=0.002,proj_dim=None,lr_sigma=0.002):
+       self.memories_ln_lrs = torch.zeros((heads, proj_dim)) # a unique lr for each parameter 
+       self.logits_ln_lrs = torch.zeros((heads, act_dim))  # a unique lr for each logit parameter
+       self.lr_sigma = lr_sigma
+       super().__init__(dna,input_dim,act_dim,heads,initialization_seed,sigma,proj_dim) 
+    def update_dna(self, new_dna):
+        ''' used to update the policy with a new dna. 
+        Mutates intelligently in that we only perform the minimum modifications to convert
+        the old network into the new one (to speed up policy creation time).
+        '''
+        # TODO: right now the network initialization is not encoded in the DNA, counterintuitive...
+
+        for j,s in enumerate(new_dna.seeds):
+          if j >= len(self.dna.seeds) or s != self.dna.seeds[j]:
+            break
+
+        # revert seeds that are no longer included
+        for i in range(len(self.dna.seeds)-1, j-1, -1):
+            s = self.dna.seeds[i]
+            self.generator.manual_seed(s)
+
+            noise1 = torch.normal(mean=0, std=1, size=self.memories.shape, generator=self.generator)
+            noise2 = torch.normal(mean=0, std=1, size=self.logits.shape, generator=self.generator)
+            noise3 = torch.normal(mean=0, std=1, size=self.memories_ln_lrs.shape, generator=self.generator)
+            noise4 = torch.normal(mean=0, std=1, size=self.logits_ln_lrs.shape, generator=self.generator)
+
+            self.memories_ln_lrs -= self.lr_sigma * noise3 # when reversing we need to do lr first
+            self.logits_ln_lrs -= self.lr_sigma * noise4 
+            self.memories -= self.sigma * noise1 * torch.exp(self.memories_ln_lrs)
+            self.logits -= self.sigma * noise2 * torch.exp(self.logits_ln_lrs)
+          
+        ## add new seeds
+        #for s in new_dna.seeds:
+        for s in new_dna.seeds[j:]:
+            self.generator.manual_seed(s)
+
+            noise1 = torch.normal(mean=0, std=1, size=self.memories.shape, generator=self.generator)
+            noise2 = torch.normal(mean=0, std=1, size=self.logits.shape, generator=self.generator)
+            noise3 = torch.normal(mean=0, std=1, size=self.memories_ln_lrs.shape, generator=self.generator)
+            noise4 = torch.normal(mean=0, std=1, size=self.logits_ln_lrs.shape, generator=self.generator)
+
+            self.memories += self.sigma * noise1 * torch.exp(self.memories_ln_lrs)
+            self.logits += self.sigma * noise2 * torch.exp(self.logits_ln_lrs)
+            self.memories_ln_lrs += self.lr_sigma * noise3
+            self.logits_ln_lrs += self.lr_sigma * noise4
 
         self.dna = new_dna
         return self

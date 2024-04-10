@@ -1,4 +1,4 @@
-from policies import ConvPolicy, LinearPolicy, MultiConv, MemorizationModule, MemorizationModuleWithLR
+from policies import ConvPolicy, LinearPolicy, MultiConv, MemorizationModule, MemorizationModuleWithLR, MemorizationModuleWithLRFull
 import torch
 from codes import BasicDNA
 from population import Sexual, EliteAsexual
@@ -72,8 +72,7 @@ def conv_factory(dna, sigma):
 multi=4
 memheads=64
 proj_dim=128
-lr_sigma=0.0
-initialization_seed=3
+initialization_seed=7
 
 def multi_conv_factory(dna, sigma):
     return MultiConv(dna, input_dims, kernels, channels, strides, num_classes, hidden_size, initialization_seed=initialization_seed, sigma=sigma, multi=multi)
@@ -84,54 +83,62 @@ def mem_factory(dna, sigma):
 def mem_factory_lr(dna, sigma, lr_sigma):
     return MemorizationModuleWithLR(dna, input_dims, num_classes, memheads, initialization_seed=initialization_seed, sigma=1,proj_dim=proj_dim, lr_sigma=lr_sigma)
 
+def mem_factory_lr_full(dna, sigma, lr_sigma):
+    return MemorizationModuleWithLRFull(dna, input_dims, num_classes, memheads, initialization_seed=initialization_seed, sigma=1,proj_dim=proj_dim, lr_sigma=lr_sigma)
+
+#factory_and_name = (mem_factory, 'memmodule')
+#factory_and_name = (mem_factory_lr, 'mmemmodulelr')
+factory,name = (mem_factory_lr_full, 'memlrfull')
+
 
 num_elites=0
 def make_configs():
     configs = []
     for (child_population_size,parent_population_size) in [(64,16)]:
         #for parent_population_size in [32]:
-        for sigma in [1.0]:
-            num_train_datapoints = 64
+        #for lr_sigma in [1e-1,5e-2,2e-2,1e-2,5e-3,2e-3,1e-3,5e-4,2e-4,1e-4,5e-5,2e-5,1e-5]:
+        for lr_sigma in [5e-05]:
+            for sigma in [1.0]:
+                num_train_datapoints = 64
 
-            loss_type='num_incorrect'
-            #loss_type='num_till_death'
+                #loss_type='num_incorrect'
+                loss_type='num_till_death'
 
-            config = {
-              'num_elites':  num_elites,
-              'parent_population_size': parent_population_size,
-              'child_population_size': child_population_size,
-              #'save_prefix': f'memfast-sexualv1-argmax-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}',
-              'save_prefix': f'{loss_type}-asexual-memmodulelr{memheads}-lrsigma{lr_sigma}-proj{proj_dim}-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}-initseeed{initialization_seed}',
-              'save_prefix': f'quicktest',
-              #'save_prefix': f'quick_new_imp2_initseed1',
-              #'distributed_class': LocalSynchronous,
-              'max_generation': 10000,
-              'distributed_class': LocalMultithreaded,
-            }
-            config['eval_method'] = MemorizationDataset(
-                    input_dims=input_dims, 
-                    num_classes=num_classes, 
-                    batch_size=min(32, num_train_datapoints // 2),
-                    #num_train_datapoints=512,
-                    num_train_datapoints=num_train_datapoints,
-                    num_val_datapoints=32,
-                    #policy_factory=mem_factory,
-                    policy_factory=mem_factory_lr,
-                    policy_args={'sigma': sigma, 'lr_sigma': lr_sigma},
-                    #policy_args={'sigma': sigma},
-                    loss_type=loss_type,
-                    #loss_type='cross_entropy',
-                    )
-            #config['population'] = EliteAsexual(
-            config['population'] = Sexual(
-                        BasicDNA, 
-                        config['parent_population_size'], 
-                        config['child_population_size'],
-                        RandomSeedGenerator(0),
-            #            config['num_elites'],
+                config = {
+                  'num_elites':  num_elites,
+                  'parent_population_size': parent_population_size,
+                  'child_population_size': child_population_size,
+                  #'save_prefix': f'memfast-sexualv1-argmax-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}',
+                  'save_prefix': f'{loss_type}-asexual-{name}-heads{memheads}-lrsigma{lr_sigma}-proj{proj_dim}-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}-initseeed{initialization_seed}-corrected',
+                  #'save_prefix': f'quicktest',
+                  #'save_prefix': f'quick_new_imp2_initseed1',
+                  #'distributed_class': LocalSynchronous,
+                  'max_generation': 100000,
+                  'distributed_class': LocalMultithreaded,
+                }
+                config['eval_method'] = MemorizationDataset(
+                        input_dims=input_dims, 
+                        num_classes=num_classes, 
+                        batch_size=min(32, num_train_datapoints // 2),
+                        #num_train_datapoints=512,
+                        num_train_datapoints=num_train_datapoints,
+                        num_val_datapoints=32,
+                        policy_factory=factory,
+                        policy_args={'sigma': sigma, 'lr_sigma': lr_sigma},
+                        #policy_args={'sigma': sigma},
+                        loss_type=loss_type,
+                        #loss_type='cross_entropy',
                         )
-                    
-            configs.append(config)
+                #config['population'] = EliteAsexual(
+                config['population'] = Sexual(
+                            BasicDNA, 
+                            config['parent_population_size'], 
+                            config['child_population_size'],
+                            RandomSeedGenerator(0),
+                #            config['num_elites'],
+                            )
+                        
+                configs.append(config)
     return configs
             
             

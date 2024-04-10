@@ -1,5 +1,21 @@
 IMPORTANT: make sure GA handles biases correctly
 
+The really long run is NOT a multi, it is misnamed
+
+3/13/24: working on adding sexual reproduction. Should speed up convergence since now beneficial mutations can occurr in parallel
+(and be recombined into the same chromosome by sexual reproduction).
+To compute the likelihood of two beneficial mutations A and B combining in the immediately following generation, you can do the math
+like here:
+https://www.wolframalpha.com/input?i=plot+1-%28%28x*%28x-1%29-2%29%2F%28x*%28x-1%29%29+%2B+%282+%2F+%28x*%28x-1%29%29%29*%283%2F4%29%29%5Ec.+let+c+%3D+512.+between+x+%3D+2+and+x+%3D+128
+the 3/4 comes from the chance that, given parents A and B, a child does not receive both A and B (1/2 * 1/2)
+ACTUALLY: on second thought, I don't think this math is important. There is a competing effect - the above shows that the fewer parents
+in a generation, the more likely that two beneficial mutations will be immediately combined. BUT the opposite effect is that it is ALSO more likely
+for a single beneficial mutation to be overwrote entirely by another beneficial one (A has 4 kids that are all better than B's kids, because A and B 
+never combined, and there are only 4 parents, so A makes all 4 parents of the next generation). If there are MORE parents per generation,
+then it is less likely that a beneficial mutation will go extinct before it can recombine with other better ones.
+Can always just test this stuff experimentally anyway...
+
+
 Current best idea:
 test the hypothesis that GA mutations interfere with previous knowledge by memorizing 
 some random dataset.
@@ -36,6 +52,10 @@ the most pressing one wins. The alternative idea is the central system has its o
 narrative that it takes into account all subsystems and then choses.
 Some problems:
 1. how do we mutate the final layer?
+--- Incredibly it seems like genetic algorithms may provide a solution to this already - 
+over time, chromosomes that are most likely to be robust to mutation with respect to the fitness
+function will out-compete others. Then, only the unimportant elements will mutate and hence discover
+new fronteirs
 
 
 TODO: investigate whether environment random seed matters for evaluations etc. 
@@ -123,6 +143,7 @@ amount of resources (money or time). Possible solutions:
 3. change the way in which networks mutate, to be faster.
    - instead of mutating entire network, mutate one layer? reduces time by factor of (network depth). can we do this without
    increasing total generations required (or possibly even decreasing it?)
+^^^ THE ABOVE IS SOLVED ^^^
 
 
 Random (not really related) thought: What if where was a way to enforce a standard ordering on network parameters?
@@ -150,12 +171,94 @@ exploring new ground without overwriting previous accomplishments.
 Possible next steps:
 1. experiment with different architectures+mutation schemes, to find one that can solve the nograd memorization
 problem quickly. A simple idea is just a NN thing where we mutate the 10 reference points, for example. 
-2. update network mutations so that network can be constructed faster. This will allow us to run long experiments
-quicker.
- -- this should be relatively straightforward with some kind of network caching. Mutations are additive, so we
- can just look at the different between the cached network dna and the new dna to modify the old network accordingly.
 3. run a bunch more experiments to see if the current setup can actually solve the nograd memorization problem
 with some set of parameters
 4. try to falsify our hypothesis that multiple parents allow multi-generation selection effects where 
 chromosomes that are robust to mutation with respect to the current fitness level are more likely to survive
 and propogate
+5. Mutate mutation rate per parameter
+
+What if we evolved a rule whereby connections between neurons were strengthened / weakened over time?
+let's say fixed kernel size of 4: 
+Neural network takes as input:
+-- one window of the input (4x4xc)
+-- current weights connecting each input to the output
+-- (optional: current output activation)
+And outputs:
+-- updates to each weight
+Could have other networks in there, for example one that takes as input all the channels at a given
+location over multiple input images, and outputs an adjustment to all input weights etc
+
+
+Random papers:
+https://www.nature.com/articles/s41567-023-02332-9
+-- mathematical modeling of both hebbian plasticy and random modifications reproduces natural 
+   connection-strength distributions and clustering
+-- in real brains, "fire-together-wire-together" is asymmetric and has time dependency. This paper
+   doesn't look into that
+
+
+We need a way for the genetic algorithm to learn which parameters to continue mutating and which parameters to 
+stop mutating (This would also allow learning of the learning rate). 
+Let's say we have n parameters, and we also keep track of n "mutation rate"s. 
+Network mutatino would be p += normal(shape(p)) * sigma * (mutation rate)
+The question is, how does mutation rate change?
+
+I have this interesting idea that sometimes, mutations that CAUSE death could be beneficial to the population. Think
+for example of this mutation rate above. For some parameters, we will want it to become very low, and then stay there.
+But once it is low enough, there will no longer be any selective pressure on it - so it will random walk until it is high
+again, and then it will take a lot of mutations to make it sufficiently low again. But, if the population were to develop
+another mutation that causes future children to die if their mutation rate increases above a low threshold, then
+it would be possible to NEVER see that parameter change again. 
+
+Put more simply - if a mutation is slightly bad, it is to the population's advantage to weed it out early, before it 
+randomly propogates (and consumes resources). This could be accomplished with some form of sexual selection also.
+
+I think the first thing we should try is just the most basic "mutating learning rate". Keep a lr for each parameter, mutate
+it at some constant rate, pass it through some function that maps it to [0,inf] (probably e^x), and then use it to mutate. Let's do it!
+
+
+So far, attempts at variable learning rates have not allowed me to succesfully memorize 64 datapoints with the "tilldeath" loss.
+One thought is that the population size is too small? If larger pop size, then non-harmful or slightly-harmful mutations
+can persist longer before they are outcompeted and rendered extinct. Or just, there is more diversity in a given pop.
+This doesn't really seem correct though - I don't want to just make it more likely that random chance will get us there,
+I want to be able to learn what changes actually will.
+
+What if we add some momentum to updates? If a param has been updated in one direction for the past few steps, then continue moving 
+in that direction
+
+Another thought is to add stochasticity into the actions - the loss can still be deterministic based on what actions are taken,
+but this would allow agents with a higher likelihood for the correct action to be more likely to survive, and hence
+provide some selective pressure to move in the right direction. A risk would be that too small populations will
+now be dominated by luckiness in actions?
+
+Apparently there is a "50/500 rule" in genetics (minimum viable population) that a population needs 50 individuals to prevent
+inbreeding depression, and 500 to guard against genetic drift at large.
+
+What stats should I record?
+1. mean and variance of learning rate (across all params)
+2. How much each "memory" is being used
+3. magnitude of each "memory"
+-- could just figure all this out from the save state
+
+OK upon investigating, I found that the norm of each  memory was increasing with every mutation. Clearly this is undesireable,
+increasing amounts of mutation are then required to make the same scale of changes. Possible fixes:
+1. restrict the norm of each parameter to remain the same 
+2. add some l2 regularization to the loss
+3. multiple the mutation by the norm of the parameter
+4. allow mutation size to increase in some other way
+5. somehow restrict each mutation to keep the norm the same (similar to 1)
+I like 1 the best, lets implement it.
+
+
+For 1 though, how do we reverse the process (for efficient mutation from cached policies)?
+given 
+   noise
+   p + noise / | p + noise |
+and the knowledge that |p| = 1, how do we determine p?
+- we can do it with the law of cosines, although I am not sure how to figure out the +/- in the
+quadratic formula besides trial and error. Surely there is an easier way...
+
+
+
+

@@ -14,7 +14,7 @@ scripts/build.sh builds the image for kubernetes master/worker pods
 scripts/start.sh deploys master, worker, rabbitmq, and tensorboard pods/services
 to the cluster.
 
-Current status 4/14/24:
+### Current status 4/14/24:
 I have been working awhile on trying to figure out an architecture and hyperparams etc.
 that can quickly learn the following tasks:
 
@@ -44,7 +44,7 @@ on this.
 
 
 
-Current status 3/5/24: 
+### Current status 3/5/24: 
 First large-ish training learned reasonably well on Frostbite, however since then
 I have decided to take some time exploring GA hyperparameters on a very simple toy problem,
 and comparing to backpropogation. The toy problem is memorizing a dataset of images of random 
@@ -63,7 +63,7 @@ the number of incorrect classes (using argmax)
 
 
 
-Below are some graphs of my first attempt training Frostbite:
+### Below are some graphs of my first attempt training Frostbite:
 
 In this graph the x-axis is generation, y-axis is average population score
 ![graph1](images/average.png "Average fitness")

@@ -8,6 +8,7 @@ See codes.py, policies.py, populations.py, and evaluations.py, distributed.py fo
 from tensorboard import program
 
 #import matplotlib
+import random
 import datetime
 import os
 from torch.utils.tensorboard import SummaryWriter
@@ -36,9 +37,9 @@ if __name__ == '__main__':
     url = tb.launch()
 
 
-    assert (sys.argv[1] == 'worker') or (sys.argv[1] == 'master')
+    assert sys.argv[1] in ['worker', 'master', 'quicktest']
     print("after assert", flush=True)
-    is_master = (sys.argv[1] == 'master')
+    is_master = (sys.argv[1] in ['master', 'quicktest'])
 
     os.makedirs('saves',exist_ok=True)
 
@@ -47,11 +48,20 @@ if __name__ == '__main__':
 
 
     def main(config):
+        if sys.argv[1] == 'quicktest':
+            config['save_prefix'] = 'quicktest'
+            config['distributed_class'] = LocalSynchronous
+
         target_fitness = 99999999999999
         best_fitness = -99999999999999
 
+
         total_training_frames = 0
         tracking_address = f'./tensorboards/{config["save_prefix"]}'
+        while os.path.exists(tracking_address):
+            config['save_prefix'] = config['save_prefix'] + '_' + str(random.randint(0,9999999999999))
+            tracking_address = f'./tensorboards/{config["save_prefix"]}'
+
         os.makedirs(tracking_address, exist_ok=True)
         writer = SummaryWriter(log_dir=tracking_address)
 

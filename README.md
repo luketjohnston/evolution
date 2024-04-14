@@ -14,6 +14,29 @@ scripts/build.sh builds the image for kubernetes master/worker pods
 scripts/start.sh deploys master, worker, rabbitmq, and tensorboard pods/services
 to the cluster.
 
+Current status 4/14/24:
+I have been working awhile on trying to figure out an architecture and hyperparams etc.
+that can quickly learn the following tasks:
+1. memorize X datapoints of random gaussian noise with random labels (one of 10 classes)
+   fitness is -1 * (number of incorrect). Hence, there is no gradient towards the correct
+   answers, the loss is either all-or-nothing with respect to each datapoint.
+2. the above task, except on the first incorrect result, evaluation terminates.
+   So fitness is the number of datapoints we got correct before the first incorrect
+   ( I shift by -X in the actual graphs).
+I am working on these tasks because I think they represent some challenging aspects of 
+environments like Atari etc - in particular the second one, since there are many failures
+which result in immediate termination of the episode.
+
+I was working with MemorizationModule in policies.py for awhile, which keeps track of "heads"
+memories, and randomly mutates one at a time. Classification is done by finding the 
+memory that has higheset similarity to the datapoint, and returning the classification of that
+memory. This learns (1) in ~1k generations for X=64 with 128 memory "heads", 
+but fails at (2). I recently realized 
+that the way I was mutating MemorizationModule was causing the norm of each memory to 
+increase over time, which is undesirable, but actually whenever I try other implementations
+they have done worse, so perhaps this has some unintented benefit. I am still working
+on this. 
+
 
 
 Current status 3/5/24: 

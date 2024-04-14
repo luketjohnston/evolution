@@ -260,5 +260,27 @@ and the knowledge that |p| = 1, how do we determine p?
 quadratic formula besides trial and error. Surely there is an easier way...
 
 
+Alright after some random experimentation, I decided to try just mutating each "memory" to a random direction
+on the unit sphere, without any regard to whatever was there previously. This learns reasonably fast (for the normal
+memorization task), but not as fast as the previous memorization policy, which had the norm of each m emory increasing
+with every mutation. I am not sure exactly why this is. One hypothesis is that, by adding to an existing memory,
+we are making it more likely to stay "near" that direction, and random walking "near" a good direction is more likely
+to uncover a better direction than random re-initialization. Another hypothesis is that it makes it possible for the memory 
+to become more and more robust to mutation. I still want to figure out a more intelligent way to select which memory to mutate,
+though.
 
+The 'increasing norm' approach could have another benefit, which is that it would allow stuff like this
+
+  +       +     +
+     +   +       +
+   +       -  +  
+      +   +       +
+    +   +   +
+
+ to be classified with only 2 memories, if the magnitudes are selected carefully (I think). Not sure about this, TODO
+
+Let's consider this solution again:
+- memories are unit vectors
+Somehow, memories determine logits for each action. The closer a memory is to a query, the higher its logit is.
+Then, selection pressure at the population level will move each memory closer to the query.
 

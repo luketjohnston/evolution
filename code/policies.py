@@ -278,29 +278,32 @@ class MemorizationModule(torch.nn.Module):
         ''' sigma is the variance of mutations (torch.normal(mean=0, std=he_init_std * sigma))
         '''
         t1 = time.time()
+        self.metadata = {}
         self.act_dim = act_dim
         self.heads = heads
         self.logits = torch.zeros([heads, act_dim])
         self.input_dim = input_dim
+        self.proj_dim = proj_dim
         self.sigma = sigma
         self.generator = torch.Generator()
         self.initialization_seed = initialization_seed
-        self.generator.manual_seed(initialization_seed)  # TODO not used
-        self.proj_dim = proj_dim
-        if self.proj_dim:
-            flattened_input_dim = functools.reduce(lambda a,b: a * b,input_dim,1)
-            self.random_projection = torch.normal(mean=0,std=1,size=[flattened_input_dim,proj_dim],generator=self.generator)
-            self.memories = torch.zeros([heads,proj_dim])
-        else:
-            self.memories = torch.zeros([heads] + list(input_dim)) 
-
-        self.dna = BasicDNA([]) # don't set to dna arg yet, will do that with call to self.update_dna(dna) below
+        self.initialize_helper(initialization_seed)
         self.update_dna(dna)
 
         t2 = time.time()
         self.metadata = {
             'policy_make_time': time.time() - t1
         }
+
+    def initialize_helper(self, initialization_seed):
+        self.generator.manual_seed(initialization_seed)  # TODO not used
+        if self.proj_dim:
+            flattened_input_dim = functools.reduce(lambda a,b: a * b,self.input_dim,1)
+            self.random_projection = torch.normal(mean=0,std=1,size=[flattened_input_dim,self.proj_dim],generator=self.generator)
+            self.memories = torch.zeros([self.heads,self.proj_dim])
+        else:
+            self.memories = torch.zeros([self.heads] + list(self.input_dim)) 
+        self.dna = BasicDNA([]) # don't set to dna arg yet, will do that with call to self.update_dna(dna) below
 
     def update_dna(self, new_dna):
         ''' used to update the policy with a new dna. 
@@ -410,30 +413,32 @@ class MemorizationModuleWithLRFull(MemorizationModule):
         Mutates intelligently in that we only perform the minimum modifications to convert
         the old network into the new one (to speed up policy creation time).
         '''
+        t1 = time.time()
         # TODO: right now the network initialization is not encoded in the DNA, counterintuitive...
 
-        for j,s in enumerate(new_dna.seeds):
-          if j >= len(self.dna.seeds) or s != self.dna.seeds[j]:
-            break
+        #for j,s in enumerate(new_dna.seeds):
+        #  if j >= len(self.dna.seeds) or s != self.dna.seeds[j]:
+        #    break
 
-        # revert seeds that are no longer included
-        for i in range(len(self.dna.seeds)-1, j-1, -1):
-            s = self.dna.seeds[i]
-            self.generator.manual_seed(s)
+        ## revert seeds that are no longer included
+        #for i in range(len(self.dna.seeds)-1, j-1, -1):
+        #    s = self.dna.seeds[i]
+        #    self.generator.manual_seed(s)
 
-            noise1 = torch.normal(mean=0, std=1, size=self.memories.shape, generator=self.generator)
-            noise2 = torch.normal(mean=0, std=1, size=self.logits.shape, generator=self.generator)
-            noise3 = torch.normal(mean=0, std=1, size=self.memories_ln_lrs.shape, generator=self.generator)
-            noise4 = torch.normal(mean=0, std=1, size=self.logits_ln_lrs.shape, generator=self.generator)
+        #    noise1 = torch.normal(mean=0, std=1, size=self.memories.shape, generator=self.generator)
+        #    noise2 = torch.normal(mean=0, std=1, size=self.logits.shape, generator=self.generator)
+        #    noise3 = torch.normal(mean=0, std=1, size=self.memories_ln_lrs.shape, generator=self.generator)
+        #    noise4 = torch.normal(mean=0, std=1, size=self.logits_ln_lrs.shape, generator=self.generator)
 
-            self.memories_ln_lrs -= self.lr_sigma * noise3 # when reversing we need to do lr first
-            self.logits_ln_lrs -= self.lr_sigma * noise4 
-            self.memories -= self.sigma * noise1 * torch.exp(self.memories_ln_lrs)
-            self.logits -= self.sigma * noise2 * torch.exp(self.logits_ln_lrs)
-          
+        #    self.memories_ln_lrs -= self.lr_sigma * noise3 # when reversing we need to do lr first
+        #    self.logits_ln_lrs -= self.lr_sigma * noise4 
+        #    self.memories -= self.sigma * noise1 * torch.exp(self.memories_ln_lrs)
+        #    self.logits -= self.sigma * noise2 * torch.exp(self.logits_ln_lrs)
+
+        self.initialize_helper(self.initialization_seed)
         ## add new seeds
-        #for s in new_dna.seeds:
-        for s in new_dna.seeds[j:]:
+        #for s in new_dna.seeds[j:]:
+        for s in new_dna.seeds:
             self.generator.manual_seed(s)
 
             noise1 = torch.normal(mean=0, std=1, size=self.memories.shape, generator=self.generator)
@@ -446,10 +451,89 @@ class MemorizationModuleWithLRFull(MemorizationModule):
             self.memories_ln_lrs += self.lr_sigma * noise3
             self.logits_ln_lrs += self.lr_sigma * noise4
 
+            self.memories /= torch.norm(self.memories, dim=1, keepdim=True) 
+            self.logits /= torch.norm(self.logits, dim=1, keepdim=True)  # TODO do we want to normalize logits?
+
         self.dna = new_dna
+        self.metadata['policy_make_time'] = time.time() - t1
         return self
+
+class MemModuleBasic(torch.nn.Module):
+    def __init__(self, dna, input_dim, act_dim, heads, initialization_seed=0,proj_dim=None):
+        t1 = time.time()
+        self.metadata = {}
+        self.act_dim = act_dim
+        self.heads = heads
+        self.logits = torch.zeros([heads, act_dim])
+        self.input_dim = input_dim
+        self.proj_dim = proj_dim
+        self.generator = torch.Generator()
+        self.initialization_seed = initialization_seed
+        self.initialize_helper(initialization_seed)
+        self.update_dna(dna)
+
+        t2 = time.time()
+        self.metadata = {
+            'policy_make_time': time.time() - t1
+        }
+
+    def initialize_helper(self, initialization_seed):
+        self.generator.manual_seed(initialization_seed)  # TODO not used
+        if self.proj_dim:
+            flattened_input_dim = functools.reduce(lambda a,b: a * b,self.input_dim,1)
+            self.random_projection = torch.normal(mean=0,std=1,size=[flattened_input_dim,self.proj_dim],generator=self.generator)
+            self.memories = torch.zeros([self.heads,self.proj_dim])
+        else:
+            self.memories = torch.zeros([self.heads] + list(self.input_dim)) 
+        self.memory_plasticity = torch.zeros([self.heads])
+        self.dna = BasicDNA([]) # don't set to dna arg yet, will do that with call to self.update_dna(dna) below
+
+
+    def update_dna(self, new_dna):
+        ''' used to update the policy with a new dna. 
+        Mutates intelligently in that we only perform the minimum modifications to convert
+        the old network into the new one (to speed up policy creation time).
+        '''
+        t1 = time.time()
+        self.initialize_helper(self.initialization_seed)
+
+        # TODO speed this up
+        for s in new_dna.seeds:
+            self.generator.manual_seed(s)
+            memory_i = torch.multinomial(torch.nn.functional.softmax(self.memory_plasticity), 1, generator=self.generator)
+            self.memories[memory_i] = torch.nn.functional.normalize(torch.normal(mean=0, std=1, size=self.memories.shape[1:], generator=self.generator), dim=0)
+            self.logits[memory_i] = torch.nn.functional.normalize(torch.normal(mean=0,std=1,size=self.logits.shape[1:],generator=self.generator), dim=0) # TODO simplify this, no need for logits?
+            #self.memory_plasticity[memory_i] -= 100
+            #self.memory_plasticity += torch.normal(mean=0,std=1,size=self.memory_plasticity.shape,generator=self.generator)
+
+        self.dna = new_dna
+        self.metadata['policy_make_time'] = time.time() - t1
+        return self
+        
+    def __call__(self, state):
+        # state [batch, h,w,c]
+        # memories [heads,h,w,c]
+        if self.proj_dim:
+            state = state.view([state.shape[0], -1]) # flatten
+            state = state @ self.random_projection
+            similarities = torch.sum(state[:,None] * self.memories[None,:],dim=-1)
+        else:
+            reduce_dimensions = list(range(2,len(self.input_dim) + 2))
+            similarities = torch.sum(state[:,None] * self.memories[None,:], dim=reduce_dimensions)
+        closest_memories = torch.argmax(similarities, dim=1)
+        logits = self.logits[closest_memories]
+        return logits
+    def act(self, state):
+        logits = self(state)
+        probs = torch.nn.functional.softmax(logits, dim=1)
+        action = torch.multinomial(probs, 1)
+        if action.shape[0] == 1: # TODO get rid of this item() logic
+            return action.item()
+        else:
+            return action
 
         
 PolicyNetwork.register(MultiConv)
 PolicyNetwork.register(MemorizationModule)
 PolicyNetwork.register(MemorizationModuleWithLR)
+PolicyNetwork.register(MemModuleBasic)

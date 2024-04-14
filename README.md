@@ -17,12 +17,17 @@ to the cluster.
 Current status 4/14/24:
 I have been working awhile on trying to figure out an architecture and hyperparams etc.
 that can quickly learn the following tasks:
-1. memorize X datapoints of random gaussian noise with random labels (one of 10 classes)
-   fitness is -1 * (number of incorrect). Hence, there is no gradient towards the correct
+
+1. memorize X datapoints of random gaussian noise with random labels (one of 10 classes).
+
+   Fitness is -1 * (number of incorrect). Hence, there is no gradient towards the correct
    answers, the loss is either all-or-nothing with respect to each datapoint.
+
 2. the above task, except on the first incorrect result, evaluation terminates.
+
    So fitness is the number of datapoints we got correct before the first incorrect
    ( I shift by -X in the actual graphs).
+
 I am working on these tasks because I think they represent some challenging aspects of 
 environments like Atari etc - in particular the second one, since there are many failures
 which result in immediate termination of the episode.

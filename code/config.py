@@ -59,7 +59,8 @@ config = {
 #config['eval_method'] = NTimes('ALE/Frostbite-v5', policy_network_class=ConvPolicy, times=1)
 
 
-input_dims=[64,64,3]
+#input_dims=[64,64,3]
+input_dims=[128]
 kernels = [8,4,3]
 channels = [3,32,64,64]
 strides = [4,2,1]
@@ -70,14 +71,14 @@ def conv_factory(dna, sigma):
     return ConvPolicy(dna, input_dims, kernels, channels, strides, num_classes, hidden_size, initialization_seed, sigma)
 
 multi=4
-memheads=64
-proj_dim=128
+memheads=256
+proj_dim=None
 initialization_seed=9
 
 def multi_conv_factory(dna, sigma):
     return MultiConv(dna, input_dims, kernels, channels, strides, num_classes, hidden_size, initialization_seed=initialization_seed, sigma=sigma, multi=multi)
 
-def mem_factory(dna, sigma):
+def mem_factory(dna, sigma, memheads):
     return MemorizationModule(dna, input_dims, num_classes, memheads, initialization_seed=initialization_seed, sigma=1,proj_dim=proj_dim)
 
 def mem_factory_lr(dna, sigma, lr_sigma):
@@ -86,13 +87,14 @@ def mem_factory_lr(dna, sigma, lr_sigma):
 def mem_factory_lr_full(dna, sigma, lr_sigma):
     return MemorizationModuleWithLRFull(dna, input_dims, num_classes, memheads, initialization_seed=initialization_seed, sigma=1,proj_dim=proj_dim, lr_sigma=lr_sigma)
 
-def mem_factory_basic(dna):
+def mem_factory_basic(dna, memheads):
     return MemModuleBasic(dna, input_dims, num_classes, memheads, initialization_seed=initialization_seed, proj_dim=proj_dim)
 
 #factory,name = (mem_factory, 'memmodule')
 #factory,name = (mem_factory_lr, 'mmemmodulelr')
 #factory,name = (mem_factory_lr_full, 'memlrfull')
-factory,name = (mem_factory_basic, 'membasic_plus3')
+#factory,name = (mem_factory_basic, 'membasic_updated1')
+factory,name = (mem_factory, 'memApr21')
 
 
 num_elites=0
@@ -101,8 +103,10 @@ def make_configs():
     for (child_population_size,parent_population_size) in [(64,16)]:
         #for parent_population_size in [32]:
         #for lr_sigma in [1e-1,5e-2,2e-2,1e-2,5e-3,2e-3,1e-3,5e-4,2e-4,1e-4,5e-5,2e-5,1e-5]:
+        #for memheads in [1024,1024,1024,1024,1024,1024,1024,1024,1024]:
+        for memheads in [64]:
         #for lr_sigma in [0]:
-            #for sigma in [1.0]:
+            for sigma in [0.02,0.05,0.1,0.2]:
                 num_train_datapoints = 64
 
                 loss_type='num_incorrect'
@@ -114,12 +118,13 @@ def make_configs():
                   'child_population_size': child_population_size,
                   #'save_prefix': f'memfast-sexualv1-argmax-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}',
                   #'save_prefix': f'{loss_type}-asexual-{name}-heads{memheads}-lrsigma{lr_sigma}-proj{proj_dim}-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}-initseeed{initialization_seed}',
-                  'save_prefix': f'{loss_type}-asexual-{name}-heads{memheads}-proj{proj_dim}-parent{parent_population_size}-child{child_population_size}-elites{num_elites}-ds{num_train_datapoints}-initseeed{initialization_seed}',
+                  'save_prefix': f'{loss_type}-asexual-{name}-heads{memheads}-proj{proj_dim}-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}-initseeed{initialization_seed}',
                   #'save_prefix': f'quicktest',
                   #'save_prefix': f'quick_new_imp2_initseed1',
                   #'distributed_class': LocalSynchronous,
-                  'max_generation': 100000,
+                  'max_generation': 2000,
                   'distributed_class': LocalMultithreaded,
+                  'checkpoint_every': 100,
                 }
                 config['eval_method'] = MemorizationDataset(
                         input_dims=input_dims, 
@@ -127,21 +132,23 @@ def make_configs():
                         batch_size=min(32, num_train_datapoints // 2),
                         #num_train_datapoints=512,
                         num_train_datapoints=num_train_datapoints,
-                        num_val_datapoints=32,
+                        num_val_datapoints=0,
                         policy_factory=factory,
+                        # somehow make it so I don't have to do this garbage
                         #policy_args={'sigma': sigma, 'lr_sigma': lr_sigma},
-                        policy_args={},
+                        #policy_args={'memheads': memheads},
+                        policy_args={'sigma': sigma, 'memheads': memheads},
                         #policy_args={'sigma': sigma},
                         loss_type=loss_type,
                         #loss_type='cross_entropy',
                         )
-                #config['population'] = EliteAsexual(
-                config['population'] = Sexual(
+                config['population'] = EliteAsexual(
+                #config['population'] = Sexual(
                             BasicDNA, 
                             config['parent_population_size'], 
                             config['child_population_size'],
                             RandomSeedGenerator(0),
-                #            config['num_elites'],
+                            config['num_elites'],
                             )
                         
                 configs.append(config)

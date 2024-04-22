@@ -114,12 +114,17 @@ class MemorizationDataset(EvaluationMethod):
 
         train_loss = 0
         val_loss = 0
+        train_total_intrinsic_fitness = 0
+        val_total_intrinsic_fitness = 0
         if self.loss_type == 'num_till_death':
             train_loss += self.num_train_datapoints / self.num_train_batches + 1
             val_loss += self.num_val_datapoints / self.num_val_batches + 1
 
         for i,(x,y) in enumerate(self.train_dataloader):
             r = policy_network(x)
+            if isinstance(r,tuple):
+              r,intrinsic_fitness=r
+              train_total_intrinsic_fitness += intrinsic_fitness
             if self.loss_type == 'cross_entropy':
                 train_loss += torch.nn.functional.cross_entropy(r, y) / self.num_train_batches
             elif self.loss_type == 'num_incorrect':
@@ -130,8 +135,12 @@ class MemorizationDataset(EvaluationMethod):
                 if torch.any(incorrect):
                   break
 
+        # TODO remove this stupid 'valset' 
         for i,(x,y) in enumerate(self.val_dataloader):
             r = policy_network(x)
+            if isinstance(r,tuple):
+              r,intrinsic_fitness=r
+              val_total_intrinsic_fitness += intrinsic_fitness
             if self.loss_type == 'cross_entropy':
                 val_loss += torch.nn.functional.cross_entropy(r, y) / self.num_train_batches
             elif self.loss_type == 'num_incorrect':
@@ -144,11 +153,12 @@ class MemorizationDataset(EvaluationMethod):
 
         metadata = {
             'train_loss': train_loss.item(),
-            'val_loss': val_loss.item(),
             'total_frames': self.num_train_batches * self.batch_size,
             'policy_make_time': policy_network.metadata['policy_make_time'],
+            'train_intrinsic_fitness': train_total_intrinsic_fitness,
+            'val_intrinsic_fitness': val_total_intrinsic_fitness,
             }       
-        return (Individual(dna, -1*train_loss.item()), metadata), policy_network
+        return (Individual(dna, (-1*train_loss.item(), train_total_intrinsic_fitness)), metadata), policy_network
 
         
 

@@ -52,7 +52,7 @@ if __name__ == '__main__':
             config['save_prefix'] = 'quicktest'
             config['distributed_class'] = LocalSynchronous
 
-        target_fitness = 99999999999999
+        target_fitness = 0
         best_fitness = -99999999999999
 
 
@@ -101,27 +101,35 @@ if __name__ == '__main__':
                      #print(datetime.datetime.now(), flush=True)
                      # most of the time, next_generation will be an empty list.
                      next_generation = population.add_grownup(individual)
-                     if individual.fitness >= target_fitness:
+                     if individual.fitness[0] >= target_fitness:
                          break
-                     if individual.fitness > best_fitness:
-                         best_fitness = individual.fitness
+                     if individual.fitness[0] > best_fitness:
+                         best_fitness = individual.fitness[0]
                          pickle.dump(individual.dna, open(f'saves/{config["save_prefix"]}_{individual.fitness}.pkl', 'wb'))
                      if next_generation:
                          generation += 1
                          # plot best fitness and average fitness
-                         ave_fitness = sum([x.fitness for x in population.last_generation_all_grownups])
+                         ave_fitness = sum([x.fitness[0] for x in population.last_generation_all_grownups])
+                         ave_intrinsic_fitness = sum([x.fitness[1] for x in population.last_generation_all_grownups])
                          ave_fitness /= len(population.last_generation_all_grownups)
+                         ave_intrinsic_fitness /= len(population.last_generation_all_grownups)
                          ave_policy_make_time /= len(population.last_generation_all_grownups)
                          writer.add_scalar('ave_policy_make_time', ave_policy_make_time, generation)
                          ave_policy_make_time = 0
                          writer.add_scalar('ave_fitness', ave_fitness, generation)
+                         writer.add_scalar('ave_intrinsic_fitness', ave_intrinsic_fitness, generation)
                          writer.add_scalar('best_fitness', best_fitness, generation)
                          writer.add_scalar('total_frames', total_frames, generation)
                          elapsed_time = time.time() - start
                          writer.add_scalar('best_fitness_time', best_fitness, elapsed_time)
                          writer.add_scalar('ave_fitness_time', ave_fitness, elapsed_time)
                          if generation > config['max_generation']:
+                             pickle.dump(individual.dna, open(f'saves/{config["save_prefix"]}_{individual.fitness}_last.pkl', 'wb'))
                              break
+
+                     if generation % config['checkpoint_every'] == 0:
+                         pickle.dump(individual.dna, open(f'saves/{config["save_prefix"]}_{individual.fitness}_gen{generation}.pkl', 'wb'))
+
 
 
                      # most of the time, next_generation will be an empty list.

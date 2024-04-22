@@ -32,7 +32,7 @@ class EliteAsexual(Population):
             ):
 
         # TODO: the initial parents should probably be evaluated, instead of assuming they all suck. The first elite will be passed on for no reason
-        self.parent_generation = SortedList([Individual(dna_class([random_seed_generator.random()]), -9999) for _ in range(parent_population_size)], key = lambda x: -x.fitness)
+        self.parent_generation = SortedList([Individual(dna_class([random_seed_generator.random()]), (-9999,0)) for _ in range(parent_population_size)], key = lambda x: x.fitness)
         self.parent_population_size = parent_population_size
         self.child_population_size = child_population_size
         self.random_seed_generator = random_seed_generator
@@ -41,7 +41,7 @@ class EliteAsexual(Population):
         # "children" are individuals that haven't had their fitness evaluated yet
         self.children = [self.reproduce() for c in range(self.child_population_size)]
         # "grownups" are individuals that have their fitnesses evaluated
-        self.grownups = SortedList([], key=lambda x: -x.fitness)
+        self.grownups = SortedList([], key=lambda x: x.fitness) # sorted in order of fitness, low to high
 
 
     def reproduce(self):
@@ -65,10 +65,10 @@ class EliteAsexual(Population):
           self.last_generation_all_grownups = self.grownups
           self.generation += 1
           # add elite first and then take first parent_pop_size in case num_parents == 1
-          self.parent_generation = SortedList(self.parent_generation[:self.num_elites] + self.grownups[:self.parent_population_size], key=lambda x: -x.fitness)[:self.parent_population_size]
+          self.parent_generation = SortedList(self.parent_generation[-self.num_elites:] + self.grownups[-self.parent_population_size:], key=lambda x: x.fitness)[-self.parent_population_size:]
           print(f"New parent generation: {self.parent_generation}", flush=True)
           self.children = [self.reproduce() for c in range(self.child_population_size)]
-          self.grownups = SortedList([], key=lambda x: -x.fitness)
+          self.grownups = SortedList([], key=lambda x: x.fitness)
           return self.children
         return []
 
@@ -83,7 +83,7 @@ class Sexual(Population):
             ):
 
         # TODO: the initial parents should probably be evaluated, instead of assuming they all suck. The first elite will be passed on for no reason
-        self.parent_generation = SortedList([Individual(dna_class([random_seed_generator.random()]), -9999) for _ in range(parent_population_size)], key = lambda x: -x.fitness)
+        self.parent_generation = SortedList([Individual(dna_class([random_seed_generator.random()]), (-9999,0)) for _ in range(parent_population_size)], key = lambda x: x.fitness)
         self.parent_population_size = parent_population_size
         self.child_population_size = child_population_size
         self.random_seed_generator = random_seed_generator
@@ -91,7 +91,7 @@ class Sexual(Population):
         # "children" are individuals that haven't had their fitness evaluated yet
         self.children = [self.reproduce() for c in range(self.child_population_size)]
         # "grownups" are individuals that have their fitnesses evaluated
-        self.grownups = SortedList([], key=lambda x: -x.fitness)
+        self.grownups = SortedList([], key=lambda x: x.fitness)
 
 
     def reproduce(self):
@@ -116,7 +116,7 @@ class Sexual(Population):
           self.parent_generation = self.grownups[:self.parent_population_size]
           print(f"New parent generation: {self.parent_generation}", flush=True)
           self.children = [self.reproduce() for c in range(self.child_population_size)]
-          self.grownups = SortedList([], key=lambda x: -x.fitness)
+          self.grownups = SortedList([], key=lambda x: x.fitness)
           return self.children
         return []
 

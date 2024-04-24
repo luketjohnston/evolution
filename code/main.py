@@ -37,9 +37,9 @@ if __name__ == '__main__':
     url = tb.launch()
 
 
-    assert sys.argv[1] in ['worker', 'master', 'quicktest']
+    assert sys.argv[1] in ['worker', 'master','m', 'quicktest','q']
     print("after assert", flush=True)
-    is_master = (sys.argv[1] in ['master', 'quicktest'])
+    is_master = (sys.argv[1] in ['master', 'quicktest','q','m'])
 
     os.makedirs('saves',exist_ok=True)
 
@@ -48,7 +48,7 @@ if __name__ == '__main__':
 
 
     def main(config):
-        if sys.argv[1] == 'quicktest':
+        if sys.argv[1] in ['quicktest','q']:
             config['save_prefix'] = 'quicktest'
             config['distributed_class'] = LocalSynchronous
 

@@ -6,6 +6,21 @@ import torch
 import time
 from codes import BasicDNA # TODO shouldnt have to do this
 
+                ## randomly pick two axes, generate 2d rotation matrix
+                #a1,a2 = torch.randint(self.heads,size=(2,), generator=self.generator)
+                #rot = torch.eye(n=self.memories.shape[1])
+                #theta = self.sigma * torch.rand(size=(1,), generator=self.generator)
+                #rot[a1,a1] = torch.cos(theta)
+                #rot[a2,a2] = torch.cos(theta)
+                #rot[a1,a2] = torch.sin(theta)
+                #rot[a2,a1] = -torch.sin(theta)
+                ##print(rot[a1,a1],rot[a1,a2],rot[a2,a1])
+                ##print(f'before rot ({a1},{a2}) {theta}:', self.memories[memory_i])
+                ## rotate the memory
+                #self.memories[memory_i] = rot @ self.memories[memory_i]
+                ##print(f'after rot ({a1},{a2}) {theta}:', self.memories[memory_i])
+
+
 class PolicyNetwork(ABC):
     @abstractmethod
     def __init__(self, dna):
@@ -14,25 +29,181 @@ class PolicyNetwork(ABC):
     def act(self, state):
         pass
 
+
+class MemorizationModule(torch.nn.Module):
+    def __init__(self, dna, input_dim, act_dim, heads, initialization_seed=0, sigma=0.002,proj_dim=None,add_memory_prob=0.4,remove_memory_prob=0.3):
+        # TODO update to flatten all memories and inputs etc, see other module at bottom
+        self.metadata = {}
+        self.add_memory_prob = add_memory_prob
+        self.remove_memory_prob = remove_memory_prob
+        #self.perturb_memory_prob = 0.3
+        self.act_dim = act_dim
+        self.heads = heads
+        self.input_dim = input_dim
+        self.proj_dim = proj_dim
+        self.sigma = sigma
+        self.generator = torch.Generator()
+        self.initialization_seed = initialization_seed
+        self.initialize_helper(initialization_seed)
+        self.update_dna(dna)
+
+
+    def initialize_helper(self, initialization_seed):
+        self.generator.manual_seed(initialization_seed)
+
+        if self.proj_dim:
+            flattened_input_dim = functools.reduce(lambda a,b: a * b,self.input_dim,1)
+            self.random_projection = torch.normal(mean=0,std=1,size=[flattened_input_dim,self.proj_dim],generator=self.generator)
+            #self.memories = torch.nn.functional.normalize(torch.normal(mean=0,std=1,size=[self.heads,self.proj_dim], generator=self.generator), dim=1)
+            self.logits = torch.zeros([heads, act_dim])
+            self.memories = torch.zeros([self.heads,self.proj_dim])
+        else:
+            #self.memories = torch.nn.functional.normalize(torch.normal(mean=0,std=1,size=[self.heads] + list(self.input_dim), generator=self.generator), dim=1)
+            self.logits = torch.zeros([self.heads, self.act_dim])
+            self.memories = torch.zeros([self.heads] + list(self.input_dim))
+        self.used_memories = []
+        self.unused_memories = list(range(self.heads))
+        self.dna = BasicDNA([]) # don't set to dna arg yet, will do that with call to self.update_dna(dna) below
+
+    def update_dna(self, new_dna):
+        ''' used to update the policy with a new dna. 
+        Mutates intelligently in that we only perform the minimum modifications to convert
+        the old network into the new one (to speed up policy creation time).
+        '''
+        t1 = time.time()
+        # TODO: right now the network initialization is not encoded in the DNA, counterintuitive...
+        current_seeds = set(self.dna.seeds)
+        new_seeds = set(new_dna.seeds)
+        self.initialize_helper(self.initialization_seed)
+
+        for s in new_dna.seeds:
+            self.generator.manual_seed(s)
+            mutation_type = torch.rand(size=(1,), generator=self.generator).item()
+
+            if mutation_type < self.add_memory_prob or len(self.used_memories) == 0:
+                if self.unused_memories:
+                    memory_i_i = torch.randint(len(self.unused_memories), size=(1,), generator=self.generator).item()
+                    memory_i = self.unused_memories[memory_i_i]
+                    self.unused_memories.pop(memory_i_i)
+                    self.used_memories.append(memory_i)
+                else:
+                    memory_i_i = torch.randint(len(self.used_memories), size=(1,), generator=self.generator).item()
+                    memory_i = self.used_memories[memory_i_i]
+                    
+
+                # set the std such that the expectation of the norm of the tensor is 1 TODO not important?
+                self.memories[memory_i] = self.sigma * torch.normal(mean=0, std=1.0 / (self.memories.shape[1])**0.5, size=self.memories.shape[1:], generator=self.generator)
+                self.memories[memory_i] = torch.nn.functional.normalize(self.memories[memory_i],dim=0)
+                self.logits[memory_i] = torch.normal(mean=0,std=1,size=self.logits.shape[1:],generator=self.generator)
+
+            elif mutation_type < self.add_memory_prob + self.remove_memory_prob:
+                # delete a memory
+                memory_i_i = torch.randint(len(self.used_memories), size=(1,), generator=self.generator).item()
+                memory_i = self.used_memories[memory_i_i]
+                self.memories[memory_i] = torch.zeros(self.memories.shape[1])
+                self.used_memories.pop(memory_i_i)
+                self.unused_memories.append(memory_i)
+            else:
+                # perturb a memory
+                memory_i_i = torch.randint(len(self.used_memories), size=(1,), generator=self.generator).item()
+                memory_i = self.used_memories[memory_i_i]
+
+                self.memories[memory_i] += self.sigma * torch.normal(mean=0, std=1.0 / (self.memories.shape[1])**0.5, size=self.memories.shape[1:], generator=self.generator)
+                self.memories[memory_i] = torch.nn.functional.normalize(self.memories[memory_i],dim=0)
+
+
+
+        #for s in set(new_dna.seeds + self.dna.seeds):
+        #    if s in current_seeds and s in new_seeds:
+        #        continue # do nothing, this mutation is cached
+        #    elif s in current_seeds and not s in new_seeds:
+        #        sign = -1
+        #    elif s not in current_seeds and s in new_seeds:
+        #        sign = 1
+        #    memory_i = s % self.memories.shape[0]
+        #    memory_seed = s // self.memories.shape[0]
+        #    self.generator.manual_seed(memory_seed)
+        #    self.memories[memory_i] += sign * self.sigma * torch.normal(mean=0, std=1, size=self.memories.shape[1:], generator=self.generator)
+        #    if self.normalize:
+        #        self.memories[memory_i] = torch.nn.functional.normalize(self.memories[memory_i],dim=0)
+        #    self.logits[memory_i] += sign * self.sigma * torch.normal(mean=0,std=1,size=self.logits.shape[1:],generator=self.generator)
+
+        self.dna = new_dna
+        self.metadata['policy_make_time'] = time.time() - t1
+        return self
+        
+    def __call__(self, state):
+        # state [batch, h,w,c]
+        # memories [heads,h,w,c]
+        if self.proj_dim:
+            state = state.view([state.shape[0], -1]) # flatten
+            state = state @ self.random_projection
+            similarities = torch.sum(state[:,None] * self.memories[None,:],dim=-1)
+        else:
+            reduce_dimensions = list(range(2,len(self.input_dim) + 2))
+            similarities = torch.sum(state[:,None] * self.memories[None,:], dim=reduce_dimensions)
+        max_similarities, closest_memories = torch.max(similarities, dim=1)
+        intrinsic_fitness = torch.mean(max_similarities)
+        intrinsic_fitness += len(self.unused_memories) * 100
+        logits = self.logits[closest_memories]
+        return logits, intrinsic_fitness.item()
+
+    def act(self, state):
+        logits = self(state)
+        probs = torch.nn.functional.softmax(logits, dim=1)
+        action = torch.multinomial(probs, 1)
+        if action.shape[0] == 1: # TODO get rid of this item() logic
+            return action.item()
+        else:
+            return action
+
 class LinearPolicy:
     ''' 
     Simple linear policy, one hidden state with relu activation, maps input dimension to 
     action dimension.
     TODO move to policy.py
     '''
-    def __init__(self, dna, state_dim, hidden_dim, act_dim):
+    def __init__(self, dna, input_dim, hidden_dim, act_dim, initialization_seed, sigma):
+        self.sigma = sigma
         self.generator = torch.Generator()
+        self.initialization_seed = initialization_seed
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.act_dim = act_dim
+        self.metadata={'policy_make_time' : 0}
+        self.initialization_helper()
+        self.update_dna(dna)
 
-        self.l1 = torch.zeros(size=(state_dim, hidden_dim))
-        self.l2 = torch.zeros(size=(hidden_dim, act_dim))
 
-        # recompute ("birth") the new policy network from the dna 
-        for s in dna.seeds:
-            # TODO should std be something different? For initializing networks?
-            # TODO fix this, see ConvPolicy
+    def initialization_helper(self):
+        self.generator.manual_seed(self.initialization_seed)
+        std = 2 / math.sqrt(self.hidden_dim)
+        self.l1 = torch.normal(mean=0, std=std, size=(self.input_dim, self.hidden_dim), generator=self.generator)
+        std = 2 / math.sqrt(self.act_dim)
+        self.l2 = torch.normal(mean=0, std=std, size=(self.hidden_dim, self.act_dim), generator=self.generator)
+        self.dna = BasicDNA([]) # don't set to dna arg yet, will do that with call to self.update_dna(dna) below
+
+    def update_dna(self, new_dna):
+        t1 = time.time()
+        current_seeds = set(self.dna.seeds)
+        new_seeds = set(new_dna.seeds)
+
+        for s in set(new_dna.seeds + self.dna.seeds):
+            if s in current_seeds and s in new_seeds:
+                continue # do nothing, this mutation is cached
+            elif s in current_seeds and not s in new_seeds:
+                sign = -1
+            elif s not in current_seeds and s in new_seeds:
+                sign = 1
+
             self.generator.manual_seed(s)
-            self.l1 += torch.normal(mean=0, std=1, size=self.l1.shape, generator=self.generator)
-            self.l2 += torch.normal(mean=0, std=1, size=self.l2.shape, generator=self.generator)
+            std = 2 / math.sqrt(self.hidden_dim)
+            self.l1 += sign * self.sigma * torch.normal(mean=0, std=1, size=self.l1.shape, generator=self.generator)
+            std = 2 / math.sqrt(self.act_dim)
+            self.l2 += sign * self.sigma * torch.normal(mean=0, std=1, size=self.l2.shape, generator=self.generator)
+        self.dna = new_dna
+        self.metadata['policy_make_time'] = time.time() - t1
+        return self
 
     def act(self, state):
         state = torch.tensor(state).float()
@@ -40,6 +211,12 @@ class LinearPolicy:
         probs = torch.nn.functional.softmax(torch.matmul(hidden, self.l2), dim=0)
         action = torch.multinomial(probs, 1)
         return action.item()
+    def __call__(self, state):
+        state = torch.tensor(state).float()
+        hidden = torch.nn.functional.relu(torch.matmul(state,  self.l1))
+        logits = torch.matmul(hidden, self.l2)
+        return logits,0
+
 PolicyNetwork.register(LinearPolicy)
 
 
@@ -274,104 +451,6 @@ class MultiConv(torch.nn.Module):
 
 
 
-class MemorizationModule(torch.nn.Module):
-    def __init__(self, dna, input_dim, act_dim, heads, initialization_seed=0, sigma=0.002,proj_dim=None,normalize=True):
-        ''' sigma is the variance of mutations (torch.normal(mean=0, std=he_init_std * sigma))
-        '''
-        t1 = time.time()
-        self.metadata = {}
-        self.act_dim = act_dim
-        self.heads = heads
-        self.logits = torch.zeros([heads, act_dim])
-        self.input_dim = input_dim
-        self.proj_dim = proj_dim
-        self.sigma = sigma
-        self.generator = torch.Generator()
-        self.initialization_seed = initialization_seed
-        self.initialize_helper(initialization_seed)
-        self.normalize=normalize
-        self.update_dna(dna)
-
-        t2 = time.time()
-        self.metadata = {
-            'policy_make_time': time.time() - t1
-        }
-
-    def initialize_helper(self, initialization_seed):
-        self.generator.manual_seed(initialization_seed)  # TODO not used
-        if self.proj_dim:
-            flattened_input_dim = functools.reduce(lambda a,b: a * b,self.input_dim,1)
-            self.random_projection = torch.normal(mean=0,std=1,size=[flattened_input_dim,self.proj_dim],generator=self.generator)
-            self.memories = torch.zeros([self.heads,self.proj_dim])
-        else:
-            self.memories = torch.zeros([self.heads] + list(self.input_dim)) 
-        self.dna = BasicDNA([]) # don't set to dna arg yet, will do that with call to self.update_dna(dna) below
-
-    def update_dna(self, new_dna):
-        ''' used to update the policy with a new dna. 
-        Mutates intelligently in that we only perform the minimum modifications to convert
-        the old network into the new one (to speed up policy creation time).
-        '''
-        # TODO: right now the network initialization is not encoded in the DNA, counterintuitive...
-        current_seeds = set(self.dna.seeds)
-        new_seeds = set(new_dna.seeds)
-        self.initialize_helper(self.initialization_seed)
-
-        for s in new_dna.seeds:
-            memory_i = s % self.memories.shape[0]
-            memory_seed = s // self.memories.shape[0]
-            self.generator.manual_seed(memory_seed)
-            # set the std such that the expectation of the norm of the tensor is 1
-            self.memories[memory_i] += self.sigma * torch.normal(mean=0, std=1.0 / (self.memories.shape[1])**0.5, size=self.memories.shape[1:], generator=self.generator)
-            #print('norm of random tensor: ', torch.normal(mean=0, std=1.0 / (self.memories.shape[1])**0.5, size=self.memories.shape[1:], generator=self.generator).norm())
-
-
-            if self.normalize:
-                self.memories[memory_i] = torch.nn.functional.normalize(self.memories[memory_i],dim=0)
-            # TODO += here too, or just =?
-            self.logits[memory_i] = self.sigma * torch.normal(mean=0,std=1,size=self.logits.shape[1:],generator=self.generator)
-
-        #for s in set(new_dna.seeds + self.dna.seeds):
-        #    if s in current_seeds and s in new_seeds:
-        #        continue # do nothing, this mutation is cached
-        #    elif s in current_seeds and not s in new_seeds:
-        #        sign = -1
-        #    elif s not in current_seeds and s in new_seeds:
-        #        sign = 1
-        #    memory_i = s % self.memories.shape[0]
-        #    memory_seed = s // self.memories.shape[0]
-        #    self.generator.manual_seed(memory_seed)
-        #    self.memories[memory_i] += sign * self.sigma * torch.normal(mean=0, std=1, size=self.memories.shape[1:], generator=self.generator)
-        #    if self.normalize:
-        #        self.memories[memory_i] = torch.nn.functional.normalize(self.memories[memory_i],dim=0)
-        #    self.logits[memory_i] += sign * self.sigma * torch.normal(mean=0,std=1,size=self.logits.shape[1:],generator=self.generator)
-
-        self.dna = new_dna
-        return self
-        
-    def __call__(self, state):
-        # state [batch, h,w,c]
-        # memories [heads,h,w,c]
-        if self.proj_dim:
-            state = state.view([state.shape[0], -1]) # flatten
-            state = state @ self.random_projection
-            similarities = torch.sum(state[:,None] * self.memories[None,:],dim=-1)
-        else:
-            reduce_dimensions = list(range(2,len(self.input_dim) + 2))
-            similarities = torch.sum(state[:,None] * self.memories[None,:], dim=reduce_dimensions)
-        max_similarities, closest_memories = torch.max(similarities, dim=1)
-        intrinsic_fitness = torch.mean(max_similarities)
-        logits = self.logits[closest_memories]
-        return logits, intrinsic_fitness.item()
-
-    def act(self, state):
-        logits = self(state)
-        probs = torch.nn.functional.softmax(logits, dim=1)
-        action = torch.multinomial(probs, 1)
-        if action.shape[0] == 1: # TODO get rid of this item() logic
-            return action.item()
-        else:
-            return action
 
 # TODO modularize the learned learning rate etc.
 class MemorizationModuleWithLR(MemorizationModule):

@@ -87,7 +87,7 @@ class NTimes(EvaluationMethod):
 EvaluationMethod.register(NTimes)
 
 class MemorizationDataset(EvaluationMethod):
-    def __init__(self, input_dims, num_classes, batch_size, num_train_datapoints, num_val_datapoints, policy_factory, policy_args, loss_type='num_incorrect'):
+    def __init__(self, input_dims, num_classes, batch_size, num_train_datapoints, num_val_datapoints, policy_factory, policy_args, loss_type='num_incorrect', seed=0):
         self.num_train_datapoints = num_train_datapoints
         self.num_val_datapoints = num_val_datapoints
 
@@ -96,12 +96,13 @@ class MemorizationDataset(EvaluationMethod):
         self.batch_size =  batch_size
         self.policy_args = policy_args
         self.policy_factory = policy_factory
+        self.seed = seed
 
         self.num_train_batches = num_train_datapoints // batch_size
         self.num_val_batches = num_val_datapoints // batch_size
 
-        self.train_dataloader  = RandomDataloader(input_dims, num_classes, num_train_datapoints, batch_size)
-        self.val_dataloader  = RandomDataloader(input_dims, num_classes, num_val_datapoints, batch_size)
+        self.train_dataloader  = RandomDataloader(input_dims, num_classes, num_train_datapoints, batch_size, seed=seed)
+        self.val_dataloader  = RandomDataloader(input_dims, num_classes, num_val_datapoints, batch_size, seed=seed+1)
         self.loss_type = loss_type
         assert loss_type in ['num_incorrect', 'cross_entropy', 'num_till_death']
 
@@ -118,7 +119,7 @@ class MemorizationDataset(EvaluationMethod):
         val_total_intrinsic_fitness = 0
         if self.loss_type == 'num_till_death':
             train_loss += self.num_train_datapoints / self.num_train_batches + 1
-            val_loss += self.num_val_datapoints / self.num_val_batches + 1
+            if self.num_val_batches > 0: val_loss += self.num_val_datapoints / self.num_val_batches + 1
 
         for i,(x,y) in enumerate(self.train_dataloader):
             r = policy_network(x)

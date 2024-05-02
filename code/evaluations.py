@@ -1,6 +1,7 @@
 from common import Individual, first_nonzero_index
 import random
 import torch
+import torchvision
 from policies import LinearPolicy, ConvPolicy
 from abc import ABC, abstractmethod
 import time
@@ -86,10 +87,71 @@ class NTimes(EvaluationMethod):
 
 EvaluationMethod.register(NTimes)
 
-class MemorizationDataset(EvaluationMethod):
-    def __init__(self, input_dims, num_classes, batch_size, num_train_datapoints, num_val_datapoints, policy_factory, policy_args, loss_type='num_incorrect', seed=0):
+class MNIST(EvaluationMethod):
+    def __init__(self, batch_size, num_train_datapoints, policy_factory, policy_args, loss_type='num_incorrect'):
         self.num_train_datapoints = num_train_datapoints
-        self.num_val_datapoints = num_val_datapoints
+
+        self.batch_size =  batch_size
+        self.policy_args = policy_args
+        self.policy_factory = policy_factory
+
+        self.transform = torchvision.transforms.Compose([
+            #torchvision.transforms.CenterCrop(10),
+            torchvision.transforms.ToTensor(),
+        ])
+
+        self.num_train_batches = num_train_datapoints // batch_size
+        training_data = torchvision.datasets.MNIST('./data/mnist', download=True, train=True, transform = self.transform)
+
+        self.train_dataloader = torch.utils.data.DataLoader(training_data, batch_size=batch_size, shuffle=True)
+
+        self.loss_type = loss_type
+        assert loss_type in ['num_incorrect', 'cross_entropy', 'num_till_death']
+
+    # TODO lots of code duplication with MemorizationDataset
+    def eval(self, dna, cached_policy=None):
+
+        if cached_policy:
+            policy_network = cached_policy.update_dna(dna)
+        else:
+            policy_network = self.policy_factory(dna, **self.policy_args)
+
+        train_loss = 0
+        train_total_intrinsic_fitness = 0
+        if self.loss_type == 'num_till_death':
+            train_loss += self.num_train_datapoints / self.num_train_batches + 1
+
+        total_evaled = 0
+        for i,(x,y) in enumerate(self.train_dataloader):
+            r = policy_network(x)
+            total_evaled += x.shape[0]
+            if isinstance(r,tuple):
+              r,intrinsic_fitness=r
+              train_total_intrinsic_fitness += intrinsic_fitness / self.num_train_batches
+            if self.loss_type == 'cross_entropy':
+                train_loss += torch.nn.functional.cross_entropy(r, y) / self.num_train_batches
+            elif self.loss_type == 'num_incorrect':
+                train_loss += torch.sum(torch.ne(torch.argmax(r, dim=1), y)) / self.num_train_batches
+            elif self.loss_type == 'num_till_death':
+                incorrect = torch.ne(torch.argmax(r, dim=1), y)
+                train_loss += -1 * first_nonzero_index(incorrect) / self.num_train_batches 
+                if torch.any(incorrect):
+                  break
+            if total_evaled >= self.num_train_datapoints: break
+
+        metadata = {
+            'train_loss': train_loss.item(),
+            'total_frames': self.num_train_batches * self.batch_size,
+            'policy_make_time': policy_network.metadata['policy_make_time'],
+            'train_intrinsic_fitness': train_total_intrinsic_fitness,
+            }       
+        return (Individual(dna, (-1*train_loss.item(), train_total_intrinsic_fitness)), metadata), policy_network
+
+EvaluationMethod.register(MNIST)
+
+class MemorizationDataset(EvaluationMethod):
+    def __init__(self, input_dims, num_classes, batch_size, num_train_datapoints, policy_factory, policy_args, loss_type='num_incorrect', seed=0):
+        self.num_train_datapoints = num_train_datapoints
 
         self.input_dims = input_dims
         self.num_classes = num_classes
@@ -99,10 +161,8 @@ class MemorizationDataset(EvaluationMethod):
         self.seed = seed
 
         self.num_train_batches = num_train_datapoints // batch_size
-        self.num_val_batches = num_val_datapoints // batch_size
 
         self.train_dataloader  = RandomDataloader(input_dims, num_classes, num_train_datapoints, batch_size, seed=seed)
-        self.val_dataloader  = RandomDataloader(input_dims, num_classes, num_val_datapoints, batch_size, seed=seed+1)
         self.loss_type = loss_type
         assert loss_type in ['num_incorrect', 'cross_entropy', 'num_till_death']
 
@@ -114,18 +174,15 @@ class MemorizationDataset(EvaluationMethod):
             policy_network = self.policy_factory(dna, **self.policy_args)
 
         train_loss = 0
-        val_loss = 0
         train_total_intrinsic_fitness = 0
-        val_total_intrinsic_fitness = 0
         if self.loss_type == 'num_till_death':
             train_loss += self.num_train_datapoints / self.num_train_batches + 1
-            if self.num_val_batches > 0: val_loss += self.num_val_datapoints / self.num_val_batches + 1
 
         for i,(x,y) in enumerate(self.train_dataloader):
             r = policy_network(x)
             if isinstance(r,tuple):
               r,intrinsic_fitness=r
-              train_total_intrinsic_fitness += intrinsic_fitness
+              train_total_intrinsic_fitness += intrinsic_fitness / self.num_train_batches
             if self.loss_type == 'cross_entropy':
                 train_loss += torch.nn.functional.cross_entropy(r, y) / self.num_train_batches
             elif self.loss_type == 'num_incorrect':
@@ -136,28 +193,11 @@ class MemorizationDataset(EvaluationMethod):
                 if torch.any(incorrect):
                   break
 
-        # TODO remove this stupid 'valset' 
-        for i,(x,y) in enumerate(self.val_dataloader):
-            r = policy_network(x)
-            if isinstance(r,tuple):
-              r,intrinsic_fitness=r
-              val_total_intrinsic_fitness += intrinsic_fitness
-            if self.loss_type == 'cross_entropy':
-                val_loss += torch.nn.functional.cross_entropy(r, y) / self.num_train_batches
-            elif self.loss_type == 'num_incorrect':
-                val_loss += torch.sum(torch.ne(torch.argmax(r, dim=1), y)) / self.num_train_batches
-            elif self.loss_type == 'num_till_death':
-                incorrect = torch.ne(torch.argmax(r, dim=1), y) 
-                val_loss += -1 * first_nonzero_index(incorrect) / self.num_train_batches
-                if torch.any(incorrect):
-                  break
-
         metadata = {
             'train_loss': train_loss.item(),
             'total_frames': self.num_train_batches * self.batch_size,
             'policy_make_time': policy_network.metadata['policy_make_time'],
             'train_intrinsic_fitness': train_total_intrinsic_fitness,
-            'val_intrinsic_fitness': val_total_intrinsic_fitness,
             }       
         return (Individual(dna, (-1*train_loss.item(), train_total_intrinsic_fitness)), metadata), policy_network
 

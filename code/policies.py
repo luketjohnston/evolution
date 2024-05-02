@@ -144,7 +144,7 @@ class MemorizationModule(torch.nn.Module):
             similarities = torch.sum(state[:,None] * self.memories[None,:], dim=reduce_dimensions)
         max_similarities, closest_memories = torch.max(similarities, dim=1)
         intrinsic_fitness = torch.mean(max_similarities)
-        intrinsic_fitness += len(self.unused_memories) * 100
+        intrinsic_fitness += len(self.unused_memories) * 100 
         logits = self.logits[closest_memories]
         return logits, intrinsic_fitness.item()
 
@@ -161,9 +161,8 @@ class LinearPolicy:
     ''' 
     Simple linear policy, one hidden state with relu activation, maps input dimension to 
     action dimension.
-    TODO move to policy.py
     '''
-    def __init__(self, dna, input_dim, hidden_dim, act_dim, initialization_seed, sigma):
+    def __init__(self, dna, input_dim, hidden_dim, act_dim, initialization_seed, sigma, trainable=False):
         self.sigma = sigma
         self.generator = torch.Generator()
         self.initialization_seed = initialization_seed
@@ -173,6 +172,10 @@ class LinearPolicy:
         self.metadata={'policy_make_time' : 0}
         self.initialization_helper()
         self.update_dna(dna)
+        if trainable:
+            self.l1 = torch.nn.Parameter(self.l1)
+            self.l2 = torch.nn.Parameter(self.l2)
+
 
 
     def initialization_helper(self):
@@ -207,12 +210,14 @@ class LinearPolicy:
 
     def act(self, state):
         state = torch.tensor(state).float()
+        state = state.view([state.shape[0], -1]) # flatten 
         hidden = torch.nn.functional.relu(torch.matmul(state,  self.l1))
         probs = torch.nn.functional.softmax(torch.matmul(hidden, self.l2), dim=0)
         action = torch.multinomial(probs, 1)
         return action.item()
     def __call__(self, state):
         state = torch.tensor(state).float()
+        state = state.view([state.shape[0], -1]) # flatten 
         hidden = torch.nn.functional.relu(torch.matmul(state,  self.l1))
         logits = torch.matmul(hidden, self.l2)
         return logits,0
@@ -221,9 +226,12 @@ PolicyNetwork.register(LinearPolicy)
 
 
 class ConvPolicy(torch.nn.Module):
-    def __init__(self, dna, input_dim, kernel_dims, channels, strides, act_dim, hidden_size, initialization_seed=0, sigma=0.002):
+    def __init__(self, dna, input_dim, kernel_dims, channels, strides, act_dim, hidden_size, initialization_seed=0, sigma=0.002, update_type='exponential'):
         ''' sigma is the variance of mutations (torch.normal(mean=0, std=he_init_std * sigma))
+
         '''
+        assert update_type in ['exponential','normal']
+        self.update_type = update_type
         super().__init__()
         t1 = time.time()
         self.kernel_dims = kernel_dims
@@ -245,8 +253,8 @@ class ConvPolicy(torch.nn.Module):
             std = 2 / math.sqrt(kernel_dims[i] * kernel_dims[i] * channels[i]) # He initialization
             self.kernels.append(torch.normal(mean=0, std=std, size=(channels[i+1], channels[i], k, k), generator=self.generator))
             self.kernel_biases.append(torch.zeros(channels[i+1]))
-            input_dim[0] = math.floor((input_dim[0] - kernel_dims[i]) / self.strides[i] + 1) # TODO verify correct?
-            input_dim[1] = math.floor((input_dim[1] - kernel_dims[i]) / self.strides[i] + 1) # TODO verify correct?
+            input_dim[0] = math.floor((input_dim[0] - kernel_dims[i]) / self.strides[i] + 1) // 2 # TODO update, make max pool an arg / setting
+            input_dim[1] = math.floor((input_dim[1] - kernel_dims[i]) / self.strides[i] + 1) // 2 # TODO update, make max pool an arg / setting
        
         std = 2 / math.sqrt(input_dim[0] * input_dim[1] * channels[-1])
         self.l1 = torch.normal(mean=0, std=std, size=(input_dim[0] * input_dim[1] * channels[-1], hidden_size), generator=self.generator)
@@ -291,17 +299,40 @@ class ConvPolicy(torch.nn.Module):
                 sign = 1
 
             self.generator.manual_seed(s)
+            lambdas = [182, 466, 976, 136]
+
             for i in range(len(self.kernels)):
                 # TODO should we actually scale by He init std here?
-                std = 2 / math.sqrt(self.kernel_dims[i] * self.kernel_dims[i] * self.channels[i]) # He initialization
-                self.kernels[i] += sign * torch.normal(mean=0, std=std*self.sigma, size=self.kernels[i].shape, generator=self.generator)
-                # TODO IMPORTANT if we keep biases in here, we have to actually use them...
+                if self.update_type == 'normal':
+                    std = 2 / math.sqrt(self.kernel_dims[i] * self.kernel_dims[i] * self.channels[i]) # He initialization
+                    adjustment = torch.normal(mean=0, std=std, size=self.kernels[i].shape, generator=self.generator)
+                elif self.update_type == 'exponential':
+                   # Use the exponential distribution we found from examining the gradient updates:
+                   adjustment = torch.zeros(size=self.kernels[i].shape).exponential_(lambdas[i], generator=self.generator)
+                   # Flip half of distribution below 0 (giving us symmetric exponential around 0)
+                   adjustment *= (torch.randint(2, size=self.kernels[i].shape, generator=self.generator) * 2 - 1)
+                else: 
+                    assert False
+
+                self.kernels[i] += sign * self.sigma * adjustment
+                # TODO if we keep biases in here, we have to actually use them...
 
             
-            std = 2 / math.sqrt(self.l1.shape[0])
-            self.l1 += sign * torch.normal(mean=0, std=std * self.sigma, size=self.l1.shape, generator=self.generator)
-            std = 2 / math.sqrt(self.l2.shape[0])
-            self.l2 += sign * torch.normal(mean=0, std=std * self.sigma, size=self.l2.shape, generator=self.generator)
+            if self.update_type == 'normal':
+                std = 2 / math.sqrt(self.l1.shape[0])
+                self.l1 += sign * self.sigma * torch.normal(mean=0, std=std, size=self.l1.shape, generator=self.generator)
+                std = 2 / math.sqrt(self.l2.shape[0])
+                self.l2 += sign * self.sigma * torch.normal(mean=0, std=std, size=self.l2.shape, generator=self.generator)
+
+            elif self.update_type == 'exponential':
+                adjustment = torch.zeros(size=self.l1.shape).exponential_(lambdas[2], generator=self.generator)
+                adjustment *= (torch.randint(2, size=self.l1.shape, generator=self.generator) * 2 - 1)
+                self.l1 += sign * self.sigma * adjustment
+                adjustment = torch.zeros(size=self.l2.shape).exponential_(lambdas[3], generator=self.generator)
+                adjustment *= (torch.randint(2, size=self.l2.shape, generator=self.generator) * 2 - 1)
+                self.l2 += sign * self.sigma * adjustment
+            else:
+                assert False
         self.dna = new_dna
         return self
 
@@ -312,18 +343,21 @@ class ConvPolicy(torch.nn.Module):
             state = torch.unsqueeze(state, 0)
             batch_size = state.shape[0]
            
-        state = torch.permute(state, [0,3,1,2])
+        #if state.shape[-1] <= 3:
+        #state = torch.permute(state, [0,3,1,2])
+
         for i,k in enumerate(self.kernels):
             state = torch.nn.functional.conv2d(state, k, stride=self.strides[i]) # TODO do I need bias for the kernels?
             state = state + self.kernel_biases[i][None, :, None, None] # TODO does this broadcast correctly?
+            state = torch.nn.functional.max_pool2d(state, 2) # TODO make maxpool a param
             state = torch.nn.functional.relu(state)
 
   
         state = state.reshape([batch_size, -1]) # flatten
         state = torch.nn.functional.relu(torch.matmul(state, self.l1))
-        state = state + self.l1_bias
+        #state = state + self.l1_bias
         logits = torch.matmul(state, self.l2)
-        logits = logits + self.l2_bias
+        #logits = logits + self.l2_bias
         return logits
 
     def act(self, state):
@@ -344,16 +378,16 @@ class ConvModule(torch.nn.Module):
         super().__init__()
         input_dim = list(input_dim)
 
-        self.kernels = []
+        self.kernels = torch.nn.ParameterList([])
         self.strides = strides
 
         for i,k in enumerate(kernel_dims):
-            self.kernels.append(torch.nn.Conv2d(channels[i], channels[i+1], k, stride=strides[i]))
-            input_dim[0] = math.floor((input_dim[0] - kernel_dims[i]) / self.strides[i] + 1) # TODO verify correct?
-            input_dim[1] = math.floor((input_dim[1] - kernel_dims[i]) / self.strides[i] + 1) # TODO verify correct?
+            self.kernels.append(torch.nn.Conv2d(channels[i], channels[i+1], k, stride=strides[i], bias=False))
+            input_dim[0] = math.floor((input_dim[0] - kernel_dims[i]) / self.strides[i] + 1) // 2 # TODO verify correct?
+            input_dim[1] = math.floor((input_dim[1] - kernel_dims[i]) / self.strides[i] + 1) // 2 # TODO verify correct?
        
-        self.l1 = torch.nn.Linear(input_dim[0] * input_dim[1] * channels[-1], hidden_size)
-        self.l2 = torch.nn.Linear(hidden_size, act_dim)
+        self.l1 = torch.nn.Linear(input_dim[0] * input_dim[1] * channels[-1], hidden_size, bias=False)
+        self.l2 = torch.nn.Linear(hidden_size, act_dim, bias=False)
 
 
     def __call__(self, state):
@@ -363,9 +397,11 @@ class ConvModule(torch.nn.Module):
             state = torch.unsqueeze(state, 0)
             batch_size = state.shape[0]
            
-        state = torch.permute(state, [0,3,1,2])
+        if state.shape[-1] <= 3:
+            state = torch.permute(state, [0,3,1,2])
         for i,k in enumerate(self.kernels):
             state = k(state) # TODO do I need bias for the kernels?
+            state = torch.nn.functional.max_pool2d(state, 2) # TODO make maxpool a param
             state = torch.nn.functional.relu(state)
 
   

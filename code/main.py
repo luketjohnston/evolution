@@ -7,6 +7,7 @@ See codes.py, policies.py, populations.py, and evaluations.py, distributed.py fo
 
 from tensorboard import program
 
+import math
 #import matplotlib
 import random
 import datetime
@@ -53,7 +54,7 @@ if __name__ == '__main__':
             config['distributed_class'] = LocalSynchronous
 
         target_fitness = 0
-        best_fitness = -99999999999999
+        best_fitness = (-99999999999999,0) # TODO make more general
 
 
         total_training_frames = 0
@@ -71,13 +72,15 @@ if __name__ == '__main__':
                 task_manager.start_worker()
             else:
                 print("Creating population",flush=True)
-                population = EliteAsexual(
-                        BasicDNA, 
-                        config['parent_population_size'], 
-                        config['child_population_size'],
-                        RandomSeedGenerator(0),
-                        config['num_elites'],
-                        )
+                population = config['population_factory'](**config['population_kwargs'])
+
+                #population=EliteAsexual(
+                #        BasicDNA, 
+                #        config['parent_population_size'], 
+                #        config['child_population_size'],
+                #        RandomSeedGenerator(0),
+                #        config['num_elites'],
+                #        )
 
                 for child in population.children:
                     task_manager.add_task(child)
@@ -101,11 +104,14 @@ if __name__ == '__main__':
                      #print(datetime.datetime.now(), flush=True)
                      # most of the time, next_generation will be an empty list.
                      next_generation = population.add_grownup(individual)
-                     if individual.fitness[0] >= target_fitness:
-                         break
-                     if individual.fitness[0] > best_fitness:
-                         best_fitness = individual.fitness[0]
+
+                     if (individual.fitness[0] == best_fitness[0] and individual.fitness[1] > best_fitness[1]): 
+                         best_fitness = individual.fitness
+
+                     if individual.fitness[0] > best_fitness[0]: 
+                         best_fitness = individual.fitness
                          pickle.dump(individual.dna, open(f'saves/{config["save_prefix"]}_{individual.fitness}.pkl', 'wb'))
+
                      if next_generation:
                          generation += 1
                          # plot best fitness and average fitness
@@ -118,19 +124,18 @@ if __name__ == '__main__':
                          ave_policy_make_time = 0
                          writer.add_scalar('ave_fitness', ave_fitness, generation)
                          writer.add_scalar('ave_intrinsic_fitness', ave_intrinsic_fitness, generation)
-                         writer.add_scalar('best_fitness', best_fitness, generation)
+                         writer.add_scalar('best_fitness', best_fitness[0], generation)
+                         writer.add_scalar('best_fitness_intrinsic', best_fitness[1] - math.floor(best_fitness[1]), generation)
                          writer.add_scalar('total_frames', total_frames, generation)
                          elapsed_time = time.time() - start
-                         writer.add_scalar('best_fitness_time', best_fitness, elapsed_time)
+                         writer.add_scalar('best_fitness_time', best_fitness[0], elapsed_time)
                          writer.add_scalar('ave_fitness_time', ave_fitness, elapsed_time)
-                         if generation > config['max_generation']:
+                         if generation > config['max_generation'] or individual.fitness[0] >= target_fitness:
                              pickle.dump(individual.dna, open(f'saves/{config["save_prefix"]}_{individual.fitness}_last.pkl', 'wb'))
                              break
 
                      if generation % config['checkpoint_every'] == 0:
                          pickle.dump(individual.dna, open(f'saves/{config["save_prefix"]}_{individual.fitness}_gen{generation}.pkl', 'wb'))
-
-
 
                      # most of the time, next_generation will be an empty list.
                      # TODO: should probably add some logic to clear existing tasks if we don't need

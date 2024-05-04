@@ -88,8 +88,9 @@ class NTimes(EvaluationMethod):
 EvaluationMethod.register(NTimes)
 
 class MNIST(EvaluationMethod):
-    def __init__(self, batch_size, num_train_datapoints, policy_factory, policy_args, loss_type='num_incorrect'):
+    def __init__(self, batch_size, num_train_datapoints, policy_factory, policy_args, loss_type='num_incorrect', device='cpu', load_from_file=True):
         self.num_train_datapoints = num_train_datapoints
+        self.device = torch.device(device)
 
         self.batch_size =  batch_size
         self.policy_args = policy_args
@@ -100,10 +101,34 @@ class MNIST(EvaluationMethod):
             torchvision.transforms.ToTensor(),
         ])
 
-        self.num_train_batches = num_train_datapoints // batch_size
-        training_data = torchvision.datasets.MNIST('./data/mnist', download=True, train=True, transform = self.transform)
+        if not load_from_file:
+            training_data = torchvision.datasets.MNIST('./data/mnist', download=True, train=True, transform = self.transform)
 
-        self.train_dataloader = torch.utils.data.DataLoader(training_data, batch_size=batch_size, shuffle=True)
+            train_dataloader = torch.utils.data.DataLoader(training_data, batch_size=64, shuffle=True)
+
+            # Once on init (which we only do once per worker), we load all the data into device memory
+            # TODO there is probably an optimization whereby we only do this once per machine
+            xl = []
+            yl = []
+            for x,y in train_dataloader:
+              xl.append(x)
+              yl.append(y)
+            self.x = torch.cat(xl, dim=0).to(self.device)
+            self.y = torch.cat(yl, dim=0).to(self.device)
+            torch.save(self.x, 'data/mnist/train_images.pt')
+            torch.save(self.y, 'data/mnist/train_labels.pt')
+        else:
+            self.x = torch.load( 'data/mnist/train_images.pt', map_location=self.device)
+            self.y = torch.load( 'data/mnist/train_labels.pt', map_location=self.device)
+            
+
+        if self.batch_size == 'all':
+            self.batch_starts = [0]
+            self.batch_size = self.x.shape[0]
+        else:
+            self.batch_starts = list(range(0,self.x.shape[0],batch_size))
+            
+
 
         self.loss_type = loss_type
         assert loss_type in ['num_incorrect', 'cross_entropy', 'num_till_death']
@@ -118,31 +143,41 @@ class MNIST(EvaluationMethod):
 
         train_loss = 0
         train_total_intrinsic_fitness = 0
-        if self.loss_type == 'num_till_death':
-            train_loss += self.num_train_datapoints / self.num_train_batches + 1
 
         total_evaled = 0
-        for i,(x,y) in enumerate(self.train_dataloader):
+        random.shuffle(self.batch_starts)
+
+        for i,batch_start in enumerate(self.batch_starts):
+            x = self.x[batch_start:batch_start+self.batch_size]
+            y = self.y[batch_start:batch_start+self.batch_size]
             r = policy_network(x)
             total_evaled += x.shape[0]
             if isinstance(r,tuple):
               r,intrinsic_fitness=r
-              train_total_intrinsic_fitness += intrinsic_fitness / self.num_train_batches
+              train_total_intrinsic_fitness += intrinsic_fitness
             if self.loss_type == 'cross_entropy':
-                train_loss += torch.nn.functional.cross_entropy(r, y) / self.num_train_batches
+                train_loss += torch.nn.functional.cross_entropy(r, y)
             elif self.loss_type == 'num_incorrect':
-                train_loss += torch.sum(torch.ne(torch.argmax(r, dim=1), y)) / self.num_train_batches
+                train_loss += torch.sum(torch.ne(torch.argmax(r, dim=1), y))
             elif self.loss_type == 'num_till_death':
                 incorrect = torch.ne(torch.argmax(r, dim=1), y)
-                train_loss += -1 * first_nonzero_index(incorrect) / self.num_train_batches 
+                train_loss += -1 * first_nonzero_index(incorrect)
                 if torch.any(incorrect):
                   break
-            if total_evaled >= self.num_train_datapoints: break
+            if (not self.num_train_datapoints == 'all') and (total_evaled >= self.num_train_datapoints): break
+
+        if self.loss_type == 'num_till_death':
+            train_loss += i + 1
+        else:
+            # NOTE that if batch_size does not divide N, this calculation will not be an exact mean
+            train_loss /= (i + 1)
+            train_total_intrinsic_fitness /= (i + 1)
 
         metadata = {
             'train_loss': train_loss.item(),
-            'total_frames': self.num_train_batches * self.batch_size,
+            'total_frames': i * self.batch_size, # TODO this may not be exact, 
             'policy_make_time': policy_network.metadata['policy_make_time'],
+            'sigma': policy_network.metadata['sigma'],
             'train_intrinsic_fitness': train_total_intrinsic_fitness,
             }       
         return (Individual(dna, (-1*train_loss.item(), train_total_intrinsic_fitness)), metadata), policy_network
@@ -256,3 +291,18 @@ class DumbDataloader():
             labels = torch.arange(self.batch_size) % self.num_classes
             datapoints = labels[:,None,None,None] * torch.ones([1, *self.input_dims])
             yield [datapoints, labels]
+
+if __name__ == '__main__':
+    MNIST(**{
+                        #'input_dims': input_dims, 
+                        #'num_classes': num_classes, 
+                        #'batch_size': 'all',
+                        'batch_size': 10000,
+                        'num_train_datapoints': 'all',
+                        'policy_factory': None,
+                        'policy_args': None,
+                        'loss_type': 'cross_entropy',
+                        'device':'mps',
+                        'load_from_file': True,
+                        #'seed': initialization_seed,
+                        })

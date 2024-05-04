@@ -157,33 +157,36 @@ class MemorizationModule(torch.nn.Module):
         else:
             return action
 
-class LinearPolicy:
+class LinearPolicy(torch.nn.Module):
     ''' 
     Simple linear policy, one hidden state with relu activation, maps input dimension to 
     action dimension.
     '''
-    def __init__(self, dna, input_dim, hidden_dim, act_dim, initialization_seed, sigma, trainable=False):
+    def __init__(self, dna, input_dim, hidden_dim, act_dim, initialization_seed, sigma, trainable=False, mutation='one', device='cpu'):
+        super().__init__()
         self.sigma = sigma
-        self.generator = torch.Generator()
+        self.device = device
+        self.generator = torch.Generator(device=device)
         self.initialization_seed = initialization_seed
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.act_dim = act_dim
         self.metadata={'policy_make_time' : 0}
+        self.mutation=mutation
         self.initialization_helper()
         self.update_dna(dna)
-        if trainable:
-            self.l1 = torch.nn.Parameter(self.l1)
-            self.l2 = torch.nn.Parameter(self.l2)
+        self.trainable=trainable
+        self.l1 = torch.nn.Parameter(self.l1, requires_grad=trainable)
+        self.l2 = torch.nn.Parameter(self.l2, requires_grad=trainable)
 
 
 
     def initialization_helper(self):
         self.generator.manual_seed(self.initialization_seed)
         std = 2 / math.sqrt(self.hidden_dim)
-        self.l1 = torch.normal(mean=0, std=std, size=(self.input_dim, self.hidden_dim), generator=self.generator)
+        self.l1 = torch.normal(mean=0, std=std, size=(self.input_dim, self.hidden_dim), generator=self.generator, device=self.device)
         std = 2 / math.sqrt(self.act_dim)
-        self.l2 = torch.normal(mean=0, std=std, size=(self.hidden_dim, self.act_dim), generator=self.generator)
+        self.l2 = torch.normal(mean=0, std=std, size=(self.hidden_dim, self.act_dim), generator=self.generator, device=self.device)
         self.dna = BasicDNA([]) # don't set to dna arg yet, will do that with call to self.update_dna(dna) below
 
     def update_dna(self, new_dna):
@@ -192,20 +195,49 @@ class LinearPolicy:
         new_seeds = set(new_dna.seeds)
 
         for s in set(new_dna.seeds + self.dna.seeds):
+            self.generator.manual_seed(s)
+            sigma_update = (torch.randint(3, size=(1,), generator=self.generator, device=self.device) - 1).item()
+            sigma_update = 0
+
             if s in current_seeds and s in new_seeds:
                 continue # do nothing, this mutation is cached
             elif s in current_seeds and not s in new_seeds:
                 sign = -1
             elif s not in current_seeds and s in new_seeds:
                 sign = 1
+                self.sigma *= 2**(sigma_update)
 
-            self.generator.manual_seed(s)
-            std = 2 / math.sqrt(self.hidden_dim)
-            self.l1 += sign * self.sigma * torch.normal(mean=0, std=1, size=self.l1.shape, generator=self.generator)
-            std = 2 / math.sqrt(self.act_dim)
-            self.l2 += sign * self.sigma * torch.normal(mean=0, std=1, size=self.l2.shape, generator=self.generator)
+
+
+            if self.mutation == 'normal':
+                std = 2 / math.sqrt(self.hidden_dim)
+                self.l1 += sign * self.sigma * torch.normal(mean=0, std=1, size=self.l1.shape, generator=self.generator,device=self.device)
+                std = 2 / math.sqrt(self.act_dim)
+                self.l2 += sign * self.sigma * torch.normal(mean=0, std=1, size=self.l2.shape, generator=self.generator, device=self.device)
+            elif self.mutation == 'exponential':
+                    lambda1 = 89
+                    randsign = torch.randint(2, size=self.l1.shape, generator=self.generator, device=self.device) * 2 - 1
+                    self.l1 += self.sigma * sign * randsign * torch.zeros(self.l1.shape, device=self.device).exponential_(lambda1, generator=self.generator)
+                    lambda2 = 39
+                    randsign = torch.randint(2, size=self.l2.shape, generator=self.generator, device=self.device) * 2 - 1
+                    self.l2 += self.sigma * sign * randsign * torch.zeros(self.l2.shape, device=self.device).exponential_(lambda2, generator=self.generator)
+
+            elif self.mutation == 'one': # TODO right now this often mutates around 0, useless
+                
+                randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
+                if randsign > 0:
+                    lambda1 = 89
+                    randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
+                    self.l1[torch.randint(self.l1.shape[0], size=(1,), generator=self.generator, device=self.device)] += self.sigma * sign * torch.zeros(1, device=self.device).exponential_(lambda1, generator=self.generator) * randsign
+                else:
+                    lambda2 = 39
+                    randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
+                    self.l2[torch.randint(self.l2.shape[0], size=(1,), generator=self.generator, device=self.device)] += self.sigma * sign * torch.zeros(1, device=self.device).exponential_(lambda2, generator=self.generator) * randsign
+            if sign == -1:
+                self.sigma *= 2**(-sigma_update)
         self.dna = new_dna
         self.metadata['policy_make_time'] = time.time() - t1
+        self.metadata['sigma'] = self.sigma
         return self
 
     def act(self, state):
@@ -220,7 +252,10 @@ class LinearPolicy:
         state = state.view([state.shape[0], -1]) # flatten 
         hidden = torch.nn.functional.relu(torch.matmul(state,  self.l1))
         logits = torch.matmul(hidden, self.l2)
-        return logits,0
+        if not self.trainable:
+            return logits,0
+        else:
+            return logits
 
 PolicyNetwork.register(LinearPolicy)
 

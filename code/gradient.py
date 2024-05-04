@@ -2,7 +2,7 @@
 import numpy as np
 from evaluations import RandomDataloader, DumbDataloader
 from collections import defaultdict
-from policies import ConvPolicy, ConvModule
+from policies import ConvPolicy, ConvModule, LinearPolicy
 from codes import BasicDNA
 import torch
 from config import input_dims, kernel_dims, channels, strides, hidden_size, num_classes
@@ -16,7 +16,7 @@ from matplotlib import pyplot as plt
 device = torch.device("mps")
 
 
-dna = BasicDNA(1)
+dna = BasicDNA([])
 
 input_dims=[28,28,1] # mnist
 trials = 5
@@ -30,7 +30,8 @@ get_grad_stats = True
 
 
 #policy_network = ConvPolicy(dna, input_dims, kernels, channels, strides, num_classes, hidden_size) 
-policy_network = ConvModule(dna, input_dims, kernel_dims, channels, strides, num_classes, hidden_size).to(device)
+#policy_network = ConvModule(dna, input_dims, kernel_dims, channels, strides, num_classes, hidden_size).to(device)
+policy_network = LinearPolicy(dna, 28*28, hidden_size, num_classes, initialization_seed=0, sigma=None, trainable=True).to(device)
  
 #batch_size = 32
 #num_train_datapoints = 32 * batch_size
@@ -54,8 +55,8 @@ val_dataloader = torch.utils.data.DataLoader(val_data, batch_size=batch_size, sh
 
 
 
-#optimizer = torch.optim.Adam(policy_network.parameters(), lr=0.001)
-optimizer = torch.optim.SGD(policy_network.parameters(), lr=0.1) # 6 epochs to 99
+optimizer = torch.optim.Adam(policy_network.parameters(), lr=0.001)
+#optimizer = torch.optim.SGD(policy_network.parameters(), lr=0.1) # 6 epochs to 99
 
 
 #num_train_batches = num_train_datapoints // batch_size

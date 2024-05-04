@@ -27,24 +27,30 @@ class DistributedMethod(ABC):
         pass
 
 
-def worker(dna, eval_method):
-  eval_result, policy_network = eval_method.eval(dna, cached_policy=worker.cached_policy)
+def worker(dna, metadata=None):
+  eval_result, policy_network = worker.eval_method.eval(dna, cached_policy=worker.cached_policy)
   worker.cached_policy = policy_network
+
+  if metadata:
+      for k,v in metadata.items():
+          assert not k in eval_result
+          eval_result[k] = v
+
   worker.queue.put(eval_result)
 
-def worker_initializer(queue):
+def worker_initializer(queue, eval_fac, eval_args):
     worker.queue = queue
+    worker.eval_method = eval_fac(**eval_args)
     worker.cached_policy = None
 
 class LocalSynchronous(DistributedMethod):
-    def __init__(self, eval_method: EvaluationMethod, is_master=True):
+    def __init__(self, eval_fac, eval_args, is_master=True):
         assert is_master, 'LocalSynchronous is_master must be True'
-        self.eval_method = eval_method
         self.queue = queue.Queue()
-        worker_initializer(self.queue)
+        worker_initializer(self.queue, eval_fac, eval_args)
 
     def add_task(self, dna):
-        worker(dna, self.eval_method)
+        worker(dna)
 
     def get_task_results(self):
         while True:
@@ -62,16 +68,15 @@ class LocalMultithreaded(DistributedMethod):
         ...
     so that python garbage collector can close correctly
     '''
-    def __init__(self, eval_method: EvaluationMethod, pool_size=None, is_master=True):
+    def __init__(self, eval_fac, eval_args, pool_size=None, is_master=True):
         assert is_master, 'LocalMultithreaded is_master must be True'
         self.queue = mp.Queue()
-        self.eval_method = eval_method
-        self.pool = mp.Pool(pool_size, initializer=worker_initializer, initargs=(self.queue,))
+        self.pool = mp.Pool(pool_size, initializer=worker_initializer, initargs=(self.queue, eval_fac, eval_args))
 
-    def add_task(self, dna):
+    def add_task(self, dna, metadata=None):
 
         #print("Applying async", flush=True)
-        self.pool.apply_async(worker, (dna, self.eval_method))
+        self.pool.apply_async(worker, (dna, metadata))
         #print("Done applying async", flush=True)
 
     def get_task_results(self):
@@ -88,6 +93,7 @@ class LocalMultithreaded(DistributedMethod):
 
 DistributedMethod.register(LocalMultithreaded)
 
+# TODO update with eval_fac and eval_args, like localMultithreaded above etc
 class DistributedRabbitMQ(DistributedMethod):
     def __init__(self, eval_method: EvaluationMethod, is_master=True):
         # don't do anything with the evaluation method - will have to setup workers elsewhere

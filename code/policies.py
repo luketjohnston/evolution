@@ -162,9 +162,11 @@ class LinearPolicy(torch.nn.Module):
     Simple linear policy, one hidden state with relu activation, maps input dimension to 
     action dimension.
     '''
-    def __init__(self, dna, input_dim, hidden_dim, act_dim, initialization_seed, sigma, trainable=False, mutation='one', device='cpu'):
+    def __init__(self, dna, input_dim, hidden_dim, act_dim, initialization_seed, sigma, trainable=False, mutation='one', device='cpu', sigma_mutation=1.3):
         super().__init__()
-        self.sigma = sigma
+        self.sigma1 = sigma
+        self.sigma2 = sigma
+        self.sigma_mutation = sigma_mutation
         self.device = device
         self.generator = torch.Generator(device=device)
         self.initialization_seed = initialization_seed
@@ -172,6 +174,7 @@ class LinearPolicy(torch.nn.Module):
         self.hidden_dim = hidden_dim
         self.act_dim = act_dim
         self.metadata={'policy_make_time' : 0}
+        assert mutation in ['one','exponential','normal']
         self.mutation=mutation
         self.initialization_helper()
         self.update_dna(dna)
@@ -189,55 +192,73 @@ class LinearPolicy(torch.nn.Module):
         self.l2 = torch.normal(mean=0, std=std, size=(self.hidden_dim, self.act_dim), generator=self.generator, device=self.device)
         self.dna = BasicDNA([]) # don't set to dna arg yet, will do that with call to self.update_dna(dna) below
 
+    def mutate(self, seed, sign):
+        self.generator.manual_seed(seed)
+        sigma1_update = (torch.randint(3, size=(1,), generator=self.generator, device=self.device) - 1).item()
+        sigma2_update = (torch.randint(3, size=(1,), generator=self.generator, device=self.device) - 1).item()
+
+        if sign == 1: 
+            self.sigma1 *= self.sigma_mutation**(sign * sigma1_update)
+            self.sigma2 *= self.sigma_mutation**(sign * sigma2_update)
+            
+        if self.mutation == 'normal':
+            std = 2 / math.sqrt(self.hidden_dim)
+            self.l1 += sign * self.sigma1 * torch.normal(mean=0, std=1, size=self.l1.shape, generator=self.generator,device=self.device)
+            std = 2 / math.sqrt(self.act_dim)
+            self.l2 += sign * self.sigma2 * torch.normal(mean=0, std=1, size=self.l2.shape, generator=self.generator, device=self.device)
+        elif self.mutation == 'exponential':
+                lambda1 = 89
+                randsign = torch.randint(2, size=self.l1.shape, generator=self.generator, device=self.device) * 2 - 1
+                self.l1 += self.sigma1 * sign * randsign * torch.zeros(self.l1.shape, device=self.device).exponential_(lambda1, generator=self.generator)
+                lambda2 = 39
+                randsign = torch.randint(2, size=self.l2.shape, generator=self.generator, device=self.device) * 2 - 1
+                self.l2 += self.sigma2 * sign * randsign * torch.zeros(self.l2.shape, device=self.device).exponential_(lambda2, generator=self.generator)
+        elif self.mutation == 'one': # TODO right now this often mutates around 0, useless
+            randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
+            if randsign > 0:
+                lambda1 = 89 # determined from investigating gradient updates. TODO improve
+                randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
+                self.l1[torch.randint(self.l1.shape[0], size=(1,), generator=self.generator, device=self.device)] += self.sigma1 * sign * torch.zeros(1, device=self.device).exponential_(lambda1, generator=self.generator) * randsign
+            else:
+                lambda2 = 39 # determined from investigating gradient updates. TODO improve
+                randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
+                self.l2[torch.randint(self.l2.shape[0], size=(1,), generator=self.generator, device=self.device)] += self.sigma2 * sign * torch.zeros(1, device=self.device).exponential_(lambda2, generator=self.generator) * randsign
+
+        if sign == -1:
+            self.sigma1 *= self.sigma_mutation**(sign * sigma1_update)
+            self.sigma2 *= self.sigma_mutation**(sign * sigma2_update)
+
     def update_dna(self, new_dna):
         t1 = time.time()
-        current_seeds = set(self.dna.seeds)
-        new_seeds = set(new_dna.seeds)
 
-        for s in set(new_dna.seeds + self.dna.seeds):
-            self.generator.manual_seed(s)
-            sigma_update = (torch.randint(3, size=(1,), generator=self.generator, device=self.device) - 1).item()
-            sigma_update = 0
+        i = 0
+        while (i < min(len(new_dna.seeds), len(self.dna.seeds))) and  new_dna.seeds[i] == self.dna.seeds[i]:
+            i += 1
 
-            if s in current_seeds and s in new_seeds:
-                continue # do nothing, this mutation is cached
-            elif s in current_seeds and not s in new_seeds:
-                sign = -1
-            elif s not in current_seeds and s in new_seeds:
-                sign = 1
-                self.sigma *= 2**(sigma_update)
+        # TODO need to verify this all actually works once I start running with more parents again 
+        # rollback unused mutations
+        for s in reversed(self.dna.seeds[i:]):
+            self.mutate(s, -1)
+        # add new mutations
+        for s in new_dna.seeds[i:]:
+            self.mutate(s, 1)
 
 
+        #for s in set(new_dna.seeds + self.dna.seeds):
+        #    if s in current_seeds and s in new_seeds:
+        #        continue # do nothing, this mutation is cached
+        #    elif s in current_seeds and not s in new_seeds:
+        #        sign = -1
+        #    elif s not in current_seeds and s in new_seeds:
+        #        sign = 1
+        #        self.sigma *= 2**(sigma_update)
 
-            if self.mutation == 'normal':
-                std = 2 / math.sqrt(self.hidden_dim)
-                self.l1 += sign * self.sigma * torch.normal(mean=0, std=1, size=self.l1.shape, generator=self.generator,device=self.device)
-                std = 2 / math.sqrt(self.act_dim)
-                self.l2 += sign * self.sigma * torch.normal(mean=0, std=1, size=self.l2.shape, generator=self.generator, device=self.device)
-            elif self.mutation == 'exponential':
-                    lambda1 = 89
-                    randsign = torch.randint(2, size=self.l1.shape, generator=self.generator, device=self.device) * 2 - 1
-                    self.l1 += self.sigma * sign * randsign * torch.zeros(self.l1.shape, device=self.device).exponential_(lambda1, generator=self.generator)
-                    lambda2 = 39
-                    randsign = torch.randint(2, size=self.l2.shape, generator=self.generator, device=self.device) * 2 - 1
-                    self.l2 += self.sigma * sign * randsign * torch.zeros(self.l2.shape, device=self.device).exponential_(lambda2, generator=self.generator)
 
-            elif self.mutation == 'one': # TODO right now this often mutates around 0, useless
-                
-                randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
-                if randsign > 0:
-                    lambda1 = 89
-                    randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
-                    self.l1[torch.randint(self.l1.shape[0], size=(1,), generator=self.generator, device=self.device)] += self.sigma * sign * torch.zeros(1, device=self.device).exponential_(lambda1, generator=self.generator) * randsign
-                else:
-                    lambda2 = 39
-                    randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
-                    self.l2[torch.randint(self.l2.shape[0], size=(1,), generator=self.generator, device=self.device)] += self.sigma * sign * torch.zeros(1, device=self.device).exponential_(lambda2, generator=self.generator) * randsign
-            if sign == -1:
-                self.sigma *= 2**(-sigma_update)
+
         self.dna = new_dna
         self.metadata['policy_make_time'] = time.time() - t1
-        self.metadata['sigma'] = self.sigma
+        self.metadata['sigma1'] = self.sigma1
+        self.metadata['sigma2'] = self.sigma2
         return self
 
     def act(self, state):

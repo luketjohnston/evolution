@@ -135,11 +135,16 @@ class MNIST(EvaluationMethod):
 
     # TODO lots of code duplication with MemorizationDataset
     def eval(self, dna, cached_policy=None):
+        #print("In eval", flush=True)
 
         if cached_policy:
+            #print("Updating cached policy:", flush=True)
             policy_network = cached_policy.update_dna(dna)
         else:
+            #print("Remaking policy", flush=True)
             policy_network = self.policy_factory(dna, **self.policy_args)
+
+        #print("Done", flush=True)
 
         train_loss = 0
         train_total_intrinsic_fitness = 0
@@ -147,7 +152,9 @@ class MNIST(EvaluationMethod):
         total_evaled = 0
         random.shuffle(self.batch_starts)
 
+        #print("Starting iteration:", flush=True)
         for i,batch_start in enumerate(self.batch_starts):
+            #print(f"batch {i}", flush=True)
             x = self.x[batch_start:batch_start+self.batch_size]
             y = self.y[batch_start:batch_start+self.batch_size]
             r = policy_network(x)
@@ -176,10 +183,10 @@ class MNIST(EvaluationMethod):
         metadata = {
             'train_loss': train_loss.item(),
             'total_frames': i * self.batch_size, # TODO this may not be exact, 
-            'policy_make_time': policy_network.metadata['policy_make_time'],
-            'sigma': policy_network.metadata['sigma'],
             'train_intrinsic_fitness': train_total_intrinsic_fitness,
             }       
+        for k,v in policy_network.metadata.items():
+            metadata[k] = v # TODO check no overlap?
         return (Individual(dna, (-1*train_loss.item(), train_total_intrinsic_fitness)), metadata), policy_network
 
 EvaluationMethod.register(MNIST)

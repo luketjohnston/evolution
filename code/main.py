@@ -112,7 +112,7 @@ if __name__ == '__main__':
                      if individual.fitness[0] > best_fitness[0]: 
                          best_fitness = individual.fitness
                          best_metadata = metadata
-                         pickle.dump(individual.dna, open(f'saves/{config["save_prefix"]}_{individual.fitness}.pkl', 'wb'))
+                         best_dna = individual.dna
 
                      if next_generation:
                          generation += 1
@@ -129,18 +129,20 @@ if __name__ == '__main__':
                          writer.add_scalar('best_fitness', best_fitness[0], generation)
                          writer.add_scalar('best_fitness_intrinsic', best_fitness[1] - math.floor(best_fitness[1]), generation)
                          writer.add_scalar('total_frames', total_frames, generation)
-                         writer.add_scalar('sigma', best_metadata['sigma'], generation)
+                         writer.add_scalar('sigma1', best_metadata['sigma1'], generation)
+                         writer.add_scalar('sigma2', best_metadata['sigma2'], generation)
                          elapsed_time = time.time() - start
                          writer.add_scalar('best_fitness_time', best_fitness[0], elapsed_time)
                          writer.add_scalar('ave_fitness_time', ave_fitness, elapsed_time)
                          if generation > config['max_generation'] or individual.fitness[0] >= target_fitness:
-                             pickle.dump(individual.dna, open(f'saves/{config["save_prefix"]}_{individual.fitness}_last.pkl', 'wb'))
+                             pickle.dump(individual.dna, open(f'saves/{config["save_prefix"]}_{individual.fitness[0]}_last.pkl', 'wb'))
                              break
 
                          if generation % config['checkpoint_every'] == 0:
 
                              #should be the best performing individual from the generation we just evaled
-                             pickle.dump(population.parent_generation[0].dna, open(f'saves/{config["save_prefix"]}_{individual.fitness}_gen{generation}.pkl', 'wb'))
+                             pickle.dump(population.parent_generation[0].dna, open(f'saves/{config["save_prefix"]}_{population.parent_generation[0].fitness}_gen{generation}.pkl', 'wb'))
+                             pickle.dump(best_dna, open(f'saves/{config["save_prefix"]}_{best_fitness[0]}.pkl', 'wb'))
 
                      # most of the time, next_generation will be an empty list.
                      # TODO: should probably add some logic to clear existing tasks if we don't need

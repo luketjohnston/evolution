@@ -28,15 +28,19 @@ class DistributedMethod(ABC):
 
 
 def worker(dna, metadata=None):
+  #print("In worker: ", flush=True)
   eval_result, policy_network = worker.eval_method.eval(dna, cached_policy=worker.cached_policy)
+  #print("worker done eval: ", flush=True)
   worker.cached_policy = policy_network
 
   if metadata:
       for k,v in metadata.items():
           assert not k in eval_result
           eval_result[k] = v
+  #print("Worker putting on queue")
 
   worker.queue.put(eval_result)
+  #print("Worker done!")
 
 def worker_initializer(queue, eval_fac, eval_args):
     worker.queue = queue
@@ -81,6 +85,7 @@ class LocalMultithreaded(DistributedMethod):
 
     def get_task_results(self):
         while True:
+            #print("About to yield queue.get():", flush=True)
             yield self.queue.get()
 
     # TODO understand this better, is it correct?

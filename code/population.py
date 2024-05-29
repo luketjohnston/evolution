@@ -65,7 +65,11 @@ class EliteAsexual(Population):
           self.last_generation_all_grownups = self.grownups
           self.generation += 1
           # add elite first and then take first parent_pop_size in case num_parents == 1
-          self.parent_generation = SortedList(self.parent_generation[-self.num_elites:] + self.grownups[-self.parent_population_size:], key=lambda x: x.fitness)[-self.parent_population_size:]
+          if self.num_elites == 0:
+              self.parent_generation = SortedList(self.grownups[-self.parent_population_size:], key=lambda x: x.fitness)
+          else:
+              self.parent_generation = SortedList(self.parent_generation[-self.num_elites:] + self.grownups[-self.parent_population_size:], key=lambda x: x.fitness)[-self.parent_population_size:]
+
           print(f"New parent generation: {self.parent_generation}", flush=True)
           self.children = [self.reproduce() for c in range(self.child_population_size)]
           self.grownups = SortedList([], key=lambda x: x.fitness)

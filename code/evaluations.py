@@ -92,7 +92,12 @@ class MNIST(EvaluationMethod):
         self.num_train_datapoints = num_train_datapoints
         self.device = torch.device(device)
 
-        self.batch_size =  batch_size
+        self.train_batch_size =  batch_size
+        self.val_batch_size =  batch_size
+
+        if type(num_train_datapoints) == int:
+            self.train_batch_size = min(batch_size, num_train_datapoints)
+
         self.policy_args = policy_args
         self.policy_factory = policy_factory
 
@@ -103,8 +108,10 @@ class MNIST(EvaluationMethod):
 
         if not load_from_file:
             training_data = torchvision.datasets.MNIST('./data/mnist', download=True, train=True, transform = self.transform)
+            val_data = torchvision.datasets.MNIST('./data/mnist', download=True, train=False, transform = self.transform)
 
             train_dataloader = torch.utils.data.DataLoader(training_data, batch_size=64, shuffle=True)
+            val_dataloader = torch.utils.data.DataLoader(val_data, batch_size=64, shuffle=True)
 
             # Once on init (which we only do once per worker), we load all the data into device memory
             # TODO there is probably an optimization whereby we only do this once per machine
@@ -115,23 +122,88 @@ class MNIST(EvaluationMethod):
               yl.append(y)
             self.x = torch.cat(xl, dim=0).to(self.device)
             self.y = torch.cat(yl, dim=0).to(self.device)
-            torch.save(self.x, 'data/mnist/train_images.pt')
-            torch.save(self.y, 'data/mnist/train_labels.pt')
+            torch.save(self.x, 'data/mnist/pytorch_saves/train_images.pt')
+            torch.save(self.y, 'data/mnist/pytorch_saves/train_labels.pt')
+
+            xl = []
+            yl = []
+            for x,y in val_dataloader:
+              xl.append(x)
+              yl.append(y)
+            self.val_x = torch.cat(xl, dim=0).to(self.device)
+            self.val_y = torch.cat(yl, dim=0).to(self.device)
+            torch.save(self.val_x, 'data/mnist/pytorch_saves/val_images.pt')
+            torch.save(self.val_y, 'data/mnist/pytorch_saves/val_labels.pt')
         else:
-            self.x = torch.load( 'data/mnist/train_images.pt', map_location=self.device)
-            self.y = torch.load( 'data/mnist/train_labels.pt', map_location=self.device)
+            self.x = torch.load( 'data/mnist/pytorch_saves/train_images.pt', map_location=self.device)
+            self.y = torch.load( 'data/mnist/pytorch_saves/train_labels.pt', map_location=self.device)
+            
+            self.val_x = torch.load( 'data/mnist/pytorch_saves/val_images.pt', map_location=self.device)
+            self.val_y = torch.load( 'data/mnist/pytorch_saves/val_labels.pt', map_location=self.device)
             
 
-        if self.batch_size == 'all':
-            self.batch_starts = [0]
-            self.batch_size = self.x.shape[0]
+        if num_train_datapoints == 'all':
+            self.train_batch_starts = [0]
+            self.train_batch_size = self.x.shape[0]
+            self.val_batch_starts = [0]
+            self.val_batch_size = self.val_x.shape[0]
         else:
-            self.batch_starts = list(range(0,self.x.shape[0],batch_size))
+            self.train_batch_starts = list(range(0,self.x.shape[0],self.train_batch_size))
+            self.val_batch_starts = list(range(0,self.val_x.shape[0],self.val_batch_size))
             
 
 
         self.loss_type = loss_type
         assert loss_type in ['num_incorrect', 'cross_entropy', 'num_till_death']
+
+    def eval_helper(self, policy_network, val=False):
+        loss = 0
+        total_intrinsic_fitness = 0
+
+        batch_size = self.val_batch_size if val else self.train_batch_size
+
+        total_evaled = 0
+
+        if not val:
+            batch_starts = self.train_batch_starts
+            all_x = self.x
+            all_y = self.y
+            random.shuffle(batch_starts)
+        else: # val
+            all_x = self.val_x
+            all_y = self.val_y
+            batch_starts = self.val_batch_starts
+
+
+        #print("Starting iteration:", flush=True)
+        for i,batch_start in enumerate(batch_starts):
+            #print(f"batch {i}", flush=True)
+            x = all_x[batch_start:batch_start+batch_size]
+            #print(f'val{val}: batch_start: {batch_start}, self.val_x.shape[0]: {self.val_x.shape[0]}, x.shape: {x.shape}')
+            y = all_y[batch_start:batch_start+batch_size]
+            r = policy_network(x)
+            total_evaled += x.shape[0]
+            if isinstance(r,tuple):
+              r,intrinsic_fitness=r
+              total_intrinsic_fitness += intrinsic_fitness
+            if self.loss_type == 'cross_entropy':
+                loss += torch.nn.functional.cross_entropy(r, y)
+            elif self.loss_type == 'num_incorrect':
+                loss += torch.sum(torch.ne(torch.argmax(r, dim=1), y))
+            elif self.loss_type == 'num_till_death':
+                incorrect = torch.ne(torch.argmax(r, dim=1), y)
+                loss += -1 * first_nonzero_index(incorrect)
+                if torch.any(incorrect):
+                  break
+            if (not self.num_train_datapoints == 'all') and (total_evaled >= self.num_train_datapoints): break
+
+        if self.loss_type == 'num_till_death':
+            loss += i + 1
+        else:
+            # NOTE that if batch_size does not divide N, this calculation will not be an exact mean
+            loss /= (i + 1)
+            total_intrinsic_fitness /= (i + 1)
+        return loss, total_intrinsic_fitness
 
     # TODO lots of code duplication with MemorizationDataset
     def eval(self, dna, cached_policy=None):
@@ -145,45 +217,16 @@ class MNIST(EvaluationMethod):
             policy_network = self.policy_factory(dna, **self.policy_args)
 
         #print("Done", flush=True)
+        train_loss, train_total_intrinsic_fitness = self.eval_helper(policy_network, val=False)
+        val_loss, val_total_intrinsic_fitness = self.eval_helper(policy_network, val=True)
 
-        train_loss = 0
-        train_total_intrinsic_fitness = 0
-
-        total_evaled = 0
-        random.shuffle(self.batch_starts)
-
-        #print("Starting iteration:", flush=True)
-        for i,batch_start in enumerate(self.batch_starts):
-            #print(f"batch {i}", flush=True)
-            x = self.x[batch_start:batch_start+self.batch_size]
-            y = self.y[batch_start:batch_start+self.batch_size]
-            r = policy_network(x)
-            total_evaled += x.shape[0]
-            if isinstance(r,tuple):
-              r,intrinsic_fitness=r
-              train_total_intrinsic_fitness += intrinsic_fitness
-            if self.loss_type == 'cross_entropy':
-                train_loss += torch.nn.functional.cross_entropy(r, y)
-            elif self.loss_type == 'num_incorrect':
-                train_loss += torch.sum(torch.ne(torch.argmax(r, dim=1), y))
-            elif self.loss_type == 'num_till_death':
-                incorrect = torch.ne(torch.argmax(r, dim=1), y)
-                train_loss += -1 * first_nonzero_index(incorrect)
-                if torch.any(incorrect):
-                  break
-            if (not self.num_train_datapoints == 'all') and (total_evaled >= self.num_train_datapoints): break
-
-        if self.loss_type == 'num_till_death':
-            train_loss += i + 1
-        else:
-            # NOTE that if batch_size does not divide N, this calculation will not be an exact mean
-            train_loss /= (i + 1)
-            train_total_intrinsic_fitness /= (i + 1)
 
         metadata = {
             'train_loss': train_loss.item(),
-            'total_frames': i * self.batch_size, # TODO this may not be exact, 
+            'val_loss': val_loss.item(),
+            'total_frames': self.x.shape[0], # TODO this may not be exact, 
             'train_intrinsic_fitness': train_total_intrinsic_fitness,
+            'val_intrinsic_fitness': val_total_intrinsic_fitness,
             }       
         for k,v in policy_network.metadata.items():
             metadata[k] = v # TODO check no overlap?

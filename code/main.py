@@ -31,10 +31,11 @@ if __name__ == '__main__':
     print("About to print sys args:", flush=True)
     print(f'sys.argv: {sys.argv}', flush=True)
 
+    experiment_name, configs = make_configs()
     
     # launches tensorboard in daemon thread, will stop when this program stops
     tb = program.TensorBoard()
-    tb.configure(argv=[None, '--logdir', './tensorboards'])
+    tb.configure(argv=[None, '--logdir', f'./tensorboards/{experiment_name}'])
     url = tb.launch()
 
 
@@ -42,7 +43,7 @@ if __name__ == '__main__':
     print("after assert", flush=True)
     is_master = (sys.argv[1] in ['master', 'quicktest','q','m'])
 
-    os.makedirs('saves',exist_ok=True)
+    os.makedirs(f'saves/{experiment_name}',exist_ok=True)
 
 
 
@@ -53,12 +54,12 @@ if __name__ == '__main__':
             config['save_prefix'] = 'quicktest'
             config['distributed_class'] = LocalSynchronous
 
-        target_fitness = 0
+        target_fitness = config['target_fitness']
         best_fitness = (-99999999999999,0) # TODO make more general
 
 
         total_training_frames = 0
-        tracking_address = f'./tensorboards/{config["save_prefix"]}'
+        tracking_address = f'./tensorboards/{experiment_name}/{config["save_prefix"]}'
         while os.path.exists(tracking_address):
             config['save_prefix'] = config['save_prefix'] + '_' + str(random.randint(0,9999999999999))
             tracking_address = f'./tensorboards/{config["save_prefix"]}'
@@ -86,7 +87,7 @@ if __name__ == '__main__':
                     task_manager.add_task(child)
 
                 start = time.time()
-                generation = 0
+                generation = -config['eval_args']['policy_args']['sigma_only_generations']
                 total_frames = 0
                 best_val_loss = 99999999
                 ave_policy_make_time = 0
@@ -127,22 +128,26 @@ if __name__ == '__main__':
                          writer.add_scalar('ave_fitness', ave_fitness, generation)
                          writer.add_scalar('ave_intrinsic_fitness', ave_intrinsic_fitness, generation)
                          writer.add_scalar('best_fitness', best_fitness[0], generation)
+                         writer.add_scalar('best_val_loss', best_val_loss, generation)
                          writer.add_scalar('best_fitness_intrinsic', best_fitness[1] - math.floor(best_fitness[1]), generation)
                          writer.add_scalar('total_frames', total_frames, generation)
                          writer.add_scalar('sigma1', best_metadata['sigma1'], generation)
                          writer.add_scalar('sigma2', best_metadata['sigma2'], generation)
+                         if generation == 0:
+                            start = time.time()
                          elapsed_time = time.time() - start
-                         writer.add_scalar('best_fitness_time', best_fitness[0], elapsed_time)
-                         writer.add_scalar('ave_fitness_time', ave_fitness, elapsed_time)
+                         if generation > 0:
+                             writer.add_scalar('best_fitness_time', best_fitness[0], elapsed_time)
+                             writer.add_scalar('ave_fitness_time', ave_fitness, elapsed_time)
                          if generation > config['max_generation'] or individual.fitness[0] >= target_fitness:
-                             pickle.dump(individual.dna, open(f'saves/{config["save_prefix"]}_{individual.fitness[0]}_last.pkl', 'wb'))
+                             pickle.dump(individual.dna, open(f'saves/{experiment_name}/{config["save_prefix"]}_{individual.fitness[0]}_last.pkl', 'wb'))
                              break
 
                          if generation % config['checkpoint_every'] == 0:
 
                              #should be the best performing individual from the generation we just evaled
-                             pickle.dump(population.parent_generation[0].dna, open(f'saves/{config["save_prefix"]}_{population.parent_generation[0].fitness}_gen{generation}.pkl', 'wb'))
-                             pickle.dump(best_dna, open(f'saves/{config["save_prefix"]}_{best_fitness[0]}.pkl', 'wb'))
+                             pickle.dump(population.parent_generation[0].dna, open(f'saves/{experiment_name}/{config["save_prefix"]}_{population.parent_generation[0].fitness}_gen{generation}.pkl', 'wb'))
+                             pickle.dump(best_dna, open(f'saves/{experiment_name}/{config["save_prefix"]}_{best_fitness[0]}.pkl', 'wb'))
 
                      # most of the time, next_generation will be an empty list.
                      # TODO: should probably add some logic to clear existing tasks if we don't need
@@ -152,8 +157,13 @@ if __name__ == '__main__':
 
         #render_eval.eval(individual.dna)
 
-    for config in make_configs():
+    for config in configs:
         main(config)
+
+        os.system(f'aws s3 cp tensorboards/{experiment_name} s3://luke-genetics/{experiment_name} --recursive')
+        os.system(f'aws s3 cp saves/{experiment_name} s3://luke-genetics/{experiment_name} --recursive')
+
+
 
 
 

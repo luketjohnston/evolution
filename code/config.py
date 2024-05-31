@@ -1,12 +1,14 @@
 from policies import ConvPolicy, LinearPolicy, MultiConv, MemorizationModule, MemorizationModuleWithLR, MemorizationModuleWithLRFull, MemModuleBasic
 import torch
 from codes import BasicDNA
+import random
 from population import Sexual, EliteAsexual
 from evaluations import MemorizationDataset, NTimes, MNIST
 from common import RandomSeedGenerator
 from distributed import LocalMultithreaded, LocalSynchronous, DistributedRabbitMQ
 
-experiment_name = 'num_train_datapoints_2'
+#experiment_name = 'num_train_datapoints_2'
+experiment_name = 'back_to_lambda89_1'
 
 configs = []
 
@@ -39,7 +41,7 @@ print(f"Using device {device}")
 factory,name = (LinearPolicy, 'mlp')
 eval_factory,eval_name=(MNIST,'mnist')
 input_dims=[28,28,1] # mnist
-trials = 5
+trials = 1
 kernel_dims = [3,3]
 channels = [1,32,64]
 strides = [1,1,1]
@@ -47,10 +49,14 @@ hidden_size = 128
 num_classes = 10
 target_fitness = -1e-3 # stop when this is reached
 
-num_train_datapoints_l = [512,2048,'all']
+#num_train_datapoints_l = [512,2048,'all']
+num_train_datapoints_l = ['all']
 #mutations = ['exponential','normal']
 mutations = ['exponential']
 
+batch_size=10000
+
+#sigma_only_generations = 100
 sigma_only_generations = 100
 max_generation=5000
 
@@ -79,12 +85,13 @@ def make_configs():
       #memheads = 64
 
       #for lr_sigma in [0]:
-      for initialization_seed in range(trials):
+      for _ in range(trials):
+        initialization_seed = random.randint(0,9999999)
         #for add_memory_prob in [0.5,0.6]:
         #for sigma in [0.02]:
         #for sigma in [0.01, 0.006, 0.003]:
         #for sigma in [0.1]: 
-        for sigma in [0.05]: 
+        for sigma in [0.1]: 
           for mutation in mutations:
             #print("Making config with init seed: ", initialization_seed)
             #for sigma in [0.2,0.1,0.04,0.02,0.01,0.004]:
@@ -159,7 +166,7 @@ def make_configs():
                         #'input_dims': input_dims, 
                         #'num_classes': num_classes, 
                         #'batch_size': 'all',
-                        'batch_size': 10000,
+                        'batch_size': batch_size,
                         'num_train_datapoints': num_train_datapoints,
                         'policy_factory': factory,
                         'policy_args': policy_args,

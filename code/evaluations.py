@@ -1,4 +1,5 @@
 from common import Individual, first_nonzero_index
+import math
 import random
 import torch
 import torchvision
@@ -89,15 +90,13 @@ EvaluationMethod.register(NTimes)
 
 class MNIST(EvaluationMethod):
     def __init__(self, batch_size, num_train_datapoints, policy_factory, policy_args, loss_type='num_incorrect', device='cpu', load_from_file=True):
+        self.load_from_file = load_from_file
         self.num_train_datapoints = num_train_datapoints
         self.device = torch.device(device)
 
-        self.train_batch_size =  batch_size
-        self.val_batch_size =  batch_size
 
         if type(num_train_datapoints) == int:
             self.train_batch_size = min(batch_size, num_train_datapoints)
-
         self.policy_args = policy_args
         self.policy_factory = policy_factory
 
@@ -106,12 +105,22 @@ class MNIST(EvaluationMethod):
             torchvision.transforms.ToTensor(),
         ])
 
-        if not load_from_file:
-            training_data = torchvision.datasets.MNIST('./data/mnist', download=True, train=True, transform = self.transform)
-            val_data = torchvision.datasets.MNIST('./data/mnist', download=True, train=False, transform = self.transform)
+        self.x, self.y = self.loader_helper(train=True)
+        self.val_x, self.val_y = self.loader_helper(train=False)
 
-            train_dataloader = torch.utils.data.DataLoader(training_data, batch_size=64, shuffle=True)
-            val_dataloader = torch.utils.data.DataLoader(val_data, batch_size=64, shuffle=True)
+        self.train_batch_size =  min(batch_size, self.x.shape[0])
+        self.val_batch_size =  min(batch_size, self.val_x.shape[0])
+
+
+        self.loss_type = loss_type
+        assert loss_type in ['num_incorrect', 'cross_entropy', 'num_till_death']
+
+    def loader_helper(self, train=True):
+        string = 'train' if train else 'val'
+        if not self.load_from_file:
+            data = torchvision.datasets.MNIST('./data/mnist', download=True, train=train, transform = self.transform)
+
+            dataloader = torch.utils.data.DataLoader(data, batch_size=64, shuffle=True)
 
             # Once on init (which we only do once per worker), we load all the data into device memory
             # TODO there is probably an optimization whereby we only do this once per machine
@@ -120,73 +129,57 @@ class MNIST(EvaluationMethod):
             for x,y in train_dataloader:
               xl.append(x)
               yl.append(y)
-            self.x = torch.cat(xl, dim=0).to(self.device)
-            self.y = torch.cat(yl, dim=0).to(self.device)
-            torch.save(self.x, 'data/mnist/pytorch_saves/train_images.pt')
-            torch.save(self.y, 'data/mnist/pytorch_saves/train_labels.pt')
-
-            xl = []
-            yl = []
-            for x,y in val_dataloader:
-              xl.append(x)
-              yl.append(y)
-            self.val_x = torch.cat(xl, dim=0).to(self.device)
-            self.val_y = torch.cat(yl, dim=0).to(self.device)
-            torch.save(self.val_x, 'data/mnist/pytorch_saves/val_images.pt')
-            torch.save(self.val_y, 'data/mnist/pytorch_saves/val_labels.pt')
+            x = torch.cat(xl, dim=0).to(self.device)
+            y = torch.cat(yl, dim=0).to(self.device)
+            torch.save(x, f'data/mnist/pytorch_saves/{string}_images.pt')
+            torch.save(y, f'data/mnist/pytorch_saves/{string}_labels.pt')
         else:
-            self.x = torch.load( 'data/mnist/pytorch_saves/train_images.pt', map_location=self.device)
-            self.y = torch.load( 'data/mnist/pytorch_saves/train_labels.pt', map_location=self.device)
-            
-            self.val_x = torch.load( 'data/mnist/pytorch_saves/val_images.pt', map_location=self.device)
-            self.val_y = torch.load( 'data/mnist/pytorch_saves/val_labels.pt', map_location=self.device)
-            
+            x = torch.load(f'data/mnist/pytorch_saves/{string}_images.pt', map_location=self.device)
+            y = torch.load(f'data/mnist/pytorch_saves/{string}_labels.pt', map_location=self.device)
 
-        if num_train_datapoints == 'all':
-            self.train_batch_starts = [0]
-            self.train_batch_size = self.x.shape[0]
-            self.val_batch_starts = [0]
-            self.val_batch_size = self.val_x.shape[0]
-        else:
-            self.train_batch_starts = list(range(0,self.x.shape[0],self.train_batch_size))
-            self.val_batch_starts = list(range(0,self.val_x.shape[0],self.val_batch_size))
-            
+        return x,y
 
-
-        self.loss_type = loss_type
-        assert loss_type in ['num_incorrect', 'cross_entropy', 'num_till_death']
 
     def eval_helper(self, policy_network, val=False):
         loss = 0
         total_intrinsic_fitness = 0
 
         batch_size = self.val_batch_size if val else self.train_batch_size
+        #print("batch size:", batch_size)
 
         total_evaled = 0
 
         if not val:
-            batch_starts = self.train_batch_starts
             all_x = self.x
             all_y = self.y
-            random.shuffle(batch_starts)
         else: # val
             all_x = self.val_x
             all_y = self.val_y
-            batch_starts = self.val_batch_starts
+
+        #indices = torch.arange(all_x.shape[0])
+        #if not val and not self.num_train_datapoints == 'all':
+        #    # if we are not training on all datapoints, we need to shuffle them
+        #    indices = torch.randperm(all_x.shape[0])
 
 
-        #print("Starting iteration:", flush=True)
-        for i,batch_start in enumerate(batch_starts):
-            #print(f"batch {i}", flush=True)
-            x = all_x[batch_start:batch_start+batch_size]
-            #print(f'val{val}: batch_start: {batch_start}, self.val_x.shape[0]: {self.val_x.shape[0]}, x.shape: {x.shape}')
-            y = all_y[batch_start:batch_start+batch_size]
+        batch_i_l = list(range(math.ceil(all_x.shape[0] / batch_size)))
+        random.shuffle(batch_i_l)
+
+        # TODO add shuffling when not training on all datapoints. If just done naively, slows
+        # everything down by a lot.
+        for i,batch_i in enumerate(batch_i_l):
+            #x = all_x[indices[batch_i * batch_size:batch_i*batch_size + batch_size]]
+            #y = all_y[indices[batch_i * batch_size:batch_i*batch_size + batch_size]]
+            x = all_x[batch_i * batch_size : batch_i * batch_size + batch_size]
+            y = all_y[batch_i * batch_size : batch_i * batch_size + batch_size]
+            #print(f"val {val}, batch {batch_i}, x.shape[0]: {x.shape[0]}, indices: {indices[batch_i * batch_size:batch_i*batch_size + batch_size]}", flush=True)
             r = policy_network(x)
             total_evaled += x.shape[0]
             if isinstance(r,tuple):
               r,intrinsic_fitness=r
               total_intrinsic_fitness += intrinsic_fitness
             if self.loss_type == 'cross_entropy':
+                #loss += torch.nn.functional.cross_entropy(r, y, reduction='sum')
                 loss += torch.nn.functional.cross_entropy(r, y)
             elif self.loss_type == 'num_incorrect':
                 loss += torch.sum(torch.ne(torch.argmax(r, dim=1), y))
@@ -343,7 +336,7 @@ class DumbDataloader():
             yield [datapoints, labels]
 
 if __name__ == '__main__':
-    MNIST(**{
+    evaler = MNIST(**{
                         #'input_dims': input_dims, 
                         #'num_classes': num_classes, 
                         #'batch_size': 'all',
@@ -356,3 +349,5 @@ if __name__ == '__main__':
                         'load_from_file': True,
                         #'seed': initialization_seed,
                         })
+    evaler.eval
+

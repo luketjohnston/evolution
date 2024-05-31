@@ -233,40 +233,27 @@ class LinearPolicy(torch.nn.Module):
         t1 = time.time()
 
         i = 0
-        while (i < min(len(new_dna.seeds) - 1, len(self.dna.seeds) - 1)) and  new_dna.seeds[i] == self.dna.seeds[i]:
+        while (i < min(len(new_dna.seeds), len(self.dna.seeds))) and  new_dna.seeds[i] == self.dna.seeds[i]:
             i += 1
-        #print(f"LEN new_dna.seeds: {len(new_dna.seeds)}", flush=True)
 
-        # if we are still mutating sigma only, need to ensure the last mutation is undone.
-        # Does not happen often when pop size is much larger than the parallelism
-        # TODO I don't think we need the i == len(new_dna.seeds) here.
-        #FOR SOME reason we need the "-1" on self.dna.seeds. Not sure why...
-
-        #if (i >= len(self.dna.seeds)) and i < self.sigma_only_generations: 
-        #    # In this case, we need to make sure we rollback the last mutation, even though the new_dna has the same seed 
-        #    # (new_dna will only be mutating sigma, whereas the current policy used that seed to mutate the full policy)
-        #    i = len(self.dna.seeds) - 1
-
-        #print(f'new dna seeds: {new_dna.seeds}, self.dna.seeds; {self.dna.seeds}, i: {i}')
+        # If we are still mutating only the sigmas, we need to make sure to rollback the last self.dna.seed
+        if (i == len(self.dna.seeds)) and i < self.sigma_only_generations:
+            i -= 1
 
         # TODO need to verify this all actually works once I start running with more parents again 
         # rollback unused mutations
         current_i = len(self.dna.seeds)
-        #negative_mutations = 0
         for s in reversed(self.dna.seeds[i:]):
             current_i -= 1
             sigma_only = current_i < len(self.dna.seeds)-1 and current_i < self.sigma_only_generations
             self.mutate(s, -1, sigma_only=sigma_only)
-            #negative_mutations += 1
 
         # add new mutations
         current_i = i
-        #positive_mutations = 0
         for s in new_dna.seeds[i:]:
             sigma_only = current_i < len(new_dna.seeds)-1 and current_i < self.sigma_only_generations
             current_i += 1
             self.mutate(s, 1, sigma_only=sigma_only)
-            #positive_mutations += 1
         #print(f"Positive mutations: {positive_mutations}, negative_mutations: {negative_mutations}")
 
 

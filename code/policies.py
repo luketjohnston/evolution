@@ -184,8 +184,8 @@ class LinearPolicy(torch.nn.Module):
 
     def initialization_helper(self):
         self.generator.manual_seed(self.initialization_seed)
-        self.sigma1 = self.start_sigma
-        self.sigma2 = self.start_sigma
+        self.sigma1 = self.start_sigma[0]
+        self.sigma2 = self.start_sigma[1]
         std = 2 / math.sqrt(self.hidden_dim)
         self.l1 = torch.nn.Parameter(torch.normal(mean=0, std=std, size=(self.input_dim, self.hidden_dim), generator=self.generator, device=self.device), requires_grad=self.trainable)
         std = 2 / math.sqrt(self.act_dim)
@@ -200,6 +200,7 @@ class LinearPolicy(torch.nn.Module):
         if sign == 1: 
             self.sigma1 *= self.sigma_mutation**(sign * sigma1_update)
             self.sigma2 *= self.sigma_mutation**(sign * sigma2_update)
+
             
         if self.mutation == 'normal' and not sigma_only:
             std = 2 / math.sqrt(self.hidden_dim)
@@ -207,10 +208,10 @@ class LinearPolicy(torch.nn.Module):
             std = 2 / math.sqrt(self.act_dim)
             self.l2 += sign * self.sigma2 * torch.normal(mean=0, std=1, size=self.l2.shape, generator=self.generator, device=self.device)
         elif self.mutation == 'exponential' and not sigma_only:
-                lambda1 = 89
+                lambda1 = 1
                 randsign = torch.randint(2, size=self.l1.shape, generator=self.generator, device=self.device) * 2 - 1
                 self.l1 += self.sigma1 * sign * randsign * torch.zeros(self.l1.shape, device=self.device).exponential_(lambda1, generator=self.generator)
-                lambda2 = 39
+                lambda2 = 1
                 randsign = torch.randint(2, size=self.l2.shape, generator=self.generator, device=self.device) * 2 - 1
                 self.l2 += self.sigma2 * sign * randsign * torch.zeros(self.l2.shape, device=self.device).exponential_(lambda2, generator=self.generator)
         elif self.mutation == 'one' and not sigma_only: 
@@ -240,7 +241,7 @@ class LinearPolicy(torch.nn.Module):
             i += 1
 
         # If we are still mutating only the sigmas, we need to make sure to rollback the last self.dna.seed
-        if (i == len(self.dna.seeds)) and i < self.sigma_only_generations and i > 0: 
+        if (i == len(self.dna.seeds)) and i <= self.sigma_only_generations and i > 0: 
             i -= 1
 
         # TODO need to verify this all actually works once I start running with more parents again 

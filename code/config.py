@@ -1,4 +1,5 @@
 from policies import ConvPolicy, LinearPolicy, MultiConv, MemorizationModule, MemorizationModuleWithLR, MemorizationModuleWithLRFull, MemModuleBasic
+from itertools import product
 import torch
 from codes import BasicDNA
 import random
@@ -8,10 +9,19 @@ from common import RandomSeedGenerator
 from distributed import LocalMultithreaded, LocalSynchronous, DistributedRabbitMQ
 
 #experiment_name = 'num_train_datapoints_2'
-experiment_name = 'back_to_lambda89_1'
+#experiment_name = 'normal_faster_maybe'
+#experiment_name = 'normal_with_starting_002'
+
+#experiment_name = 'normal_hyperparam_search1'
+#experiment_name = 'test_exp_sigma1start_1'
+#experiment_name = 'print1'
+experiment_name = 'constant_sigma1'
 
 configs = []
 
+
+popsizes = [(256,1)]
+#popsizes = [(3,1)]
 
 #input_dims=[64,64,3]
 #input_dims=[128]
@@ -51,13 +61,28 @@ target_fitness = -1e-3 # stop when this is reached
 
 #num_train_datapoints_l = [512,2048,'all']
 num_train_datapoints_l = ['all']
-#mutations = ['exponential','normal']
-mutations = ['exponential']
+mutations = ['normal']
+#mutations = ['one']
+#sigma_mutations = [1.1] # 1 means no mutation
+#sigma_mutations = [1.05] # 1 means no mutation
+sigma_mutations = [1.0] # 1 means no mutation
 
-batch_size=10000
+batch_sizes=[10000]
 
 #sigma_only_generations = 100
-sigma_only_generations = 100
+# NOTE that the base sigma still cannot be too high or else it will not be able to even find
+# which direction it needs to mutate in. May  be worth investigating which layer this effect
+# is more important for
+#sigma_only_generations = 200
+#max_generation=2000
+
+#sigma_l = [0.005, 0.01, 0.02]
+#sigma_l = [0.03] # normal distribution usually equalizes at higher than 0.03 in sigma-only phase
+
+sigma_l = [(7e-3,6e-3), (2e-3,1e-3), (1e-3,4e-5)] # Can start both exponential and normal at 0.02
+
+sigma_only_generations_l = [-1]
+#sigma_only_generations_l = [1]
 max_generation=5000
 
 #sigma_only_generations = 0
@@ -71,122 +96,102 @@ max_generation=5000
 #input_dims=[128]
 
 
+
 num_elites=0
 num_classes = 10
 def make_configs():
     configs = []
-    #for (child_population_size,parent_population_size) in [(16*4,1)]:
-    for (child_population_size,parent_population_size) in [(256,1)]:
-    #for (child_population_size,parent_population_size) in [(2,1)]:
-    #for (child_population_size,parent_population_size) in [(16,1)]:
-      #for parent_population_size in [32]:
-      #for lr_sigma in [1e-1,5e-2,2e-2,1e-2,5e-3,2e-3,1e-3,5e-4,2e-4,1e-4,5e-5,2e-5,1e-5]:
-      #for memheads in [1024,1024,1024,1024,1024,1024,1024,1024,1024]:
-      #memheads = 64
 
-      #for lr_sigma in [0]:
-      for _ in range(trials):
-        initialization_seed = random.randint(0,9999999)
-        #for add_memory_prob in [0.5,0.6]:
-        #for sigma in [0.02]:
-        #for sigma in [0.01, 0.006, 0.003]:
-        #for sigma in [0.1]: 
-        for sigma in [0.1]: 
-          for mutation in mutations:
-            #print("Making config with init seed: ", initialization_seed)
-            #for sigma in [0.2,0.1,0.04,0.02,0.01,0.004]:
-            #for sigma in [0.2]:
-                #num_train_datapoints = 64
-            for num_train_datapoints in num_train_datapoints_l:
-            #for num_train_datapoints in [10]:
+    for num_train_datapoints, popsize, trial, batch_size, sigma_only_generations, sigma_mutation, sigma, mutation in product(
+            num_train_datapoints_l, popsizes, range(trials), batch_sizes, sigma_only_generations_l, sigma_mutations, sigma_l, mutations):
 
-                #loss_type='num_incorrect'
-                loss_type='cross_entropy'
-                #loss_type='num_till_death'
+      child_population_size, parent_population_size = popsize
 
-                #policy_args = {
-                #    'sigma': sigma, 
-                #    'heads': memheads,
-                #    'input_dim': input_dims,
-                #    'act_dim': num_classes,
-                #    'initialization_seed': initialization_seed,
-                #    'sigma': sigma,
-                #    'add_memory_prob': add_memory_prob,
-                #    'remove_memory_prob': 0.2,
-                #    }
+      initialization_seed = random.randint(0,9999999)
+      pop_init_seed = initialization_seed
 
-                policy_args = {
-                    'sigma': sigma, 
-                    'input_dim': input_dims[0] * input_dims[1],
-                    'act_dim': num_classes,
-                    'hidden_dim': 128,
-                    'initialization_seed': initialization_seed,
-                    'sigma': sigma,
-                    'mutation': mutation,
-                    'device':device,
-                    'sigma_mutation': 1.1, # 1 means no mutation
-                    'sigma_only_generations': sigma_only_generations,
-                    #'sigma_only_generations': -1,
+      # TODO any way to scale these the same way?
+      #if mutation == 'exponential':
+      #  sigma = 0.2
+      #elif mutation == 'normal':
+      #  sigma = 0.03
+      #elif mutation == 'uniform':
+      #  sigma = 0.1
+      #elif mutation == 'one':
+      #  sigma = 0.05
 
-                    }
 
-                #policy_args = {
-                #    'sigma': sigma, 
-                #    'input_dim': input_dims,
-                #    'kernel_dims': kernel_dims,
-                #    'channels': channels,
-                #    'strides': strides,
-                #    'act_dim': num_classes,
-                #    'hidden_size': hidden_size,
-                #    'initialization_seed': initialization_seed,
-                #    'sigma': sigma,
-                #    'update_type': 'exponential',
-                #    }
+      #loss_type='num_incorrect'
+      loss_type='cross_entropy'
+      #loss_type='num_till_death'
 
-                # TODO automate other parts of save-prefix (asexual, etc)
-                save_prefix = f'{eval_name}-{loss_type}-asexual-{name}-parent{parent_population_size}-child{child_population_size}-sigma{sigma}-elites{num_elites}-ds{num_train_datapoints}'
-                for k,v in policy_args.items():
-                    if k in ['kernel_dims', 'strides','channels','act_dim','hidden_size','input_dim', 'device']:
-                        continue
-                    save_prefix += f'-{k}{v}'
+      #policy_args = {
+      #    'sigma': sigma, 
+      #    'heads': memheads,
+      #    'input_dim': input_dims,
+      #    'act_dim': num_classes,
+      #    'initialization_seed': initialization_seed,
+      #    'sigma': sigma,
+      #    'add_memory_prob': add_memory_prob,
+      #    'remove_memory_prob': 0.2,
+      #    }
 
-                config = {
-                  'num_elites':  num_elites,
-                  'parent_population_size': parent_population_size,
-                  'child_population_size': child_population_size,
-                  'save_prefix': save_prefix,
-                  'max_generation': max_generation,
-                  #'max_generation': 10,
-                  'distributed_class': LocalMultithreaded,
-                  'checkpoint_every': 1000,
-                  'target_fitness': target_fitness,
-                }
+      policy_args = {
+          'sigma': sigma, 
+          'input_dim': input_dims[0] * input_dims[1],
+          'act_dim': num_classes,
+          'hidden_dim': 128,
+          'initialization_seed': initialization_seed,
+          'mutation': mutation,
+          'device':device,
+          'sigma_mutation': sigma_mutation, # 1 means no mutation
+          'sigma_only_generations': sigma_only_generations,
 
-                config['eval_args'] = {
-                        #'input_dims': input_dims, 
-                        #'num_classes': num_classes, 
-                        #'batch_size': 'all',
-                        'batch_size': batch_size,
-                        'num_train_datapoints': num_train_datapoints,
-                        'policy_factory': factory,
-                        'policy_args': policy_args,
-                        'loss_type': loss_type,
-                        'device':device,
-                        #'seed': initialization_seed,
-                        }
+          }
 
-                config['eval_fac'] = eval_factory
+      # TODO automate other parts of save-prefix (asexual, etc)
+      save_prefix = f'{eval_name}-{loss_type}-asex-{name}-p{parent_population_size}-c{child_population_size}-e{num_elites}-ds{num_train_datapoints}-t{trial}-pis{pop_init_seed}-s1{sigma[0]}-s2{sigma[1]}'
+      for k,v in policy_args.items():
+          if k in ['kernel_dims', 'strides','channels','act_dim','hidden_size','input_dim', 'device', 'sigma']:
+              continue
+          save_prefix += f'-{k}{v}'
 
-                config['population_factory'] = EliteAsexual
-                config['population_kwargs'] = {
-                            'dna_class': BasicDNA, 
-                            'parent_population_size': config['parent_population_size'], 
-                            'child_population_size': config['child_population_size'],
-                            'random_seed_generator': RandomSeedGenerator(0),
-                            'num_elites': config['num_elites'],
-                            }
-                        
-                configs.append(config)
+      config = {
+        'num_elites':  num_elites,
+        'parent_population_size': parent_population_size,
+        'child_population_size': child_population_size,
+        'save_prefix': save_prefix,
+        'max_generation': max_generation,
+        'distributed_class': LocalMultithreaded,
+        'checkpoint_every': 1000,
+        'target_fitness': target_fitness,
+      }
+
+      config['eval_args'] = {
+              #'input_dims': input_dims, 
+              #'num_classes': num_classes, 
+              #'batch_size': 'all',
+              'batch_size': batch_size,
+              'num_train_datapoints': num_train_datapoints,
+              'policy_factory': factory,
+              'policy_args': policy_args,
+              'loss_type': loss_type,
+              'device':device,
+              #'seed': initialization_seed,
+              }
+
+      config['eval_fac'] = eval_factory
+
+      config['population_factory'] = EliteAsexual
+      config['population_kwargs'] = {
+                  'dna_class': BasicDNA, 
+                  'parent_population_size': config['parent_population_size'], 
+                  'child_population_size': config['child_population_size'],
+                  'random_seed_generator': RandomSeedGenerator(pop_init_seed),
+                  'num_elites': config['num_elites'],
+                  }
+              
+      configs.append(config)
     return (experiment_name, configs)
             
             

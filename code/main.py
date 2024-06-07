@@ -32,6 +32,9 @@ if __name__ == '__main__':
     print(f'sys.argv: {sys.argv}', flush=True)
 
     experiment_name, configs = make_configs()
+    device = configs[0]['eval_args']['device']
+    if device == 'cuda':
+        mp.set_start_method('spawn')
     
     # launches tensorboard in daemon thread, will stop when this program stops
     tb = program.TensorBoard()
@@ -86,10 +89,14 @@ if __name__ == '__main__':
                 for child in population.children:
                     task_manager.add_task(child)
 
+                true_start_time = time.time()
+                last_time = time.time()
                 start = time.time()
                 generation = -config['eval_args']['policy_args']['sigma_only_generations']
+                start_generation = generation
                 total_frames = 0
                 best_val_loss = 99999999
+                best_val_acc = 0
                 ave_policy_make_time = 0
 
                 for individual, metadata in task_manager.get_task_results():
@@ -97,6 +104,7 @@ if __name__ == '__main__':
                      total_training_frames += metadata['total_frames']
                      if 'val_loss' in metadata:
                          best_val_loss = min(metadata['val_loss'], best_val_loss)
+                         best_val_acc = max(metadata['val_acc'], best_val_acc)
                          #print(f'best_val_loss: {best_val_loss}, val_loss: {metadata["val_loss"]}')
                      total_frames += metadata['total_frames']
                      ave_policy_make_time += metadata['policy_make_time'] 
@@ -116,11 +124,14 @@ if __name__ == '__main__':
                          best_dna = individual.dna
 
                      if next_generation:
+                         s_per_g = (time.time() - true_start_time) / (generation - start_generation + 1)
+                         s_per_i = s_per_g / config['child_population_size']
                          generation += 1
                          # plot best fitness and average fitness
                          ave_fitness = sum([x.fitness[0] for x in population.last_generation_all_grownups])
-                         ave_intrinsic_fitness = sum([x.fitness[1] for x in population.last_generation_all_grownups])
                          ave_fitness /= len(population.last_generation_all_grownups)
+                         print(f"BEST {best_fitness[0]}, AVE {ave_fitness}, generation {generation} complete, {s_per_g}s/g, {s_per_i}s/i")
+                         ave_intrinsic_fitness = sum([x.fitness[1] for x in population.last_generation_all_grownups])
                          ave_intrinsic_fitness /= len(population.last_generation_all_grownups)
                          ave_policy_make_time /= len(population.last_generation_all_grownups)
                          writer.add_scalar('ave_policy_make_time', ave_policy_make_time, generation)
@@ -129,10 +140,16 @@ if __name__ == '__main__':
                          writer.add_scalar('ave_intrinsic_fitness', ave_intrinsic_fitness, generation)
                          writer.add_scalar('best_fitness', best_fitness[0], generation)
                          writer.add_scalar('best_val_loss', best_val_loss, generation)
+                         writer.add_scalar('best_val_acc', best_val_acc, generation)
                          writer.add_scalar('best_fitness_intrinsic', best_fitness[1] - math.floor(best_fitness[1]), generation)
                          writer.add_scalar('total_frames', total_frames, generation)
                          writer.add_scalar('sigma1', best_metadata['sigma1'], generation)
                          writer.add_scalar('sigma2', best_metadata['sigma2'], generation)
+                         writer.add_scalar('generation_elapsed_time', time.time() - last_time, generation)
+                         last_time = time.time()
+
+
+
                          if generation == 0:
                             start = time.time()
                          elapsed_time = time.time() - start

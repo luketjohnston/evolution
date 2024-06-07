@@ -178,9 +178,13 @@ class MNIST(EvaluationMethod):
             if isinstance(r,tuple):
               r,intrinsic_fitness=r
               total_intrinsic_fitness += intrinsic_fitness
+
+            correct = torch.sum(torch.argmax(r,dim=1) == y)
+
             if self.loss_type == 'cross_entropy':
-                #loss += torch.nn.functional.cross_entropy(r, y, reduction='sum')
-                loss += torch.nn.functional.cross_entropy(r, y)
+                loss += torch.nn.functional.cross_entropy(r, y, reduction='sum')
+                # compute acc
+                #loss += torch.nn.functional.cross_entropy(r, y)
             elif self.loss_type == 'num_incorrect':
                 loss += torch.sum(torch.ne(torch.argmax(r, dim=1), y))
             elif self.loss_type == 'num_till_death':
@@ -194,9 +198,10 @@ class MNIST(EvaluationMethod):
             loss += i + 1
         else:
             # NOTE that if batch_size does not divide N, this calculation will not be an exact mean
-            loss /= (i + 1)
-            total_intrinsic_fitness /= (i + 1)
-        return loss, total_intrinsic_fitness
+            loss /= all_x.shape[0]
+            total_intrinsic_fitness /= all_x.shape[0]
+            acc = correct / all_x.shape[0]
+        return loss, total_intrinsic_fitness, acc
 
     # TODO lots of code duplication with MemorizationDataset
     def eval(self, dna, cached_policy=None):
@@ -210,13 +215,14 @@ class MNIST(EvaluationMethod):
             policy_network = self.policy_factory(dna, **self.policy_args)
 
         #print("Done", flush=True)
-        train_loss, train_total_intrinsic_fitness = self.eval_helper(policy_network, val=False)
-        val_loss, val_total_intrinsic_fitness = self.eval_helper(policy_network, val=True)
+        train_loss, train_total_intrinsic_fitness, train_acc = self.eval_helper(policy_network, val=False)
+        val_loss, val_total_intrinsic_fitness, val_acc = self.eval_helper(policy_network, val=True)
 
 
         metadata = {
             'train_loss': train_loss.item(),
             'val_loss': val_loss.item(),
+            'val_acc': val_acc.item(),
             'total_frames': self.x.shape[0], # TODO this may not be exact, 
             'train_intrinsic_fitness': train_total_intrinsic_fitness,
             'val_intrinsic_fitness': val_total_intrinsic_fitness,

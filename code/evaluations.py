@@ -94,7 +94,6 @@ class MNIST(EvaluationMethod):
         self.num_train_datapoints = num_train_datapoints
         self.device = torch.device(device)
 
-
         if type(num_train_datapoints) == int:
             self.train_batch_size = min(batch_size, num_train_datapoints)
         self.policy_args = policy_args
@@ -108,8 +107,14 @@ class MNIST(EvaluationMethod):
         self.x, self.y = self.loader_helper(train=True)
         self.val_x, self.val_y = self.loader_helper(train=False)
 
-        self.train_batch_size =  min(batch_size, self.x.shape[0])
-        self.val_batch_size =  min(batch_size, self.val_x.shape[0])
+        if self.num_train_datapoints == 'all':
+            self.num_train_datapoints = self.x.shape[0]
+
+        self.train_batch_size =  min(min(batch_size, self.x.shape[0]), self.num_train_datapoints)
+        self.val_batch_size =  min(min(batch_size, self.val_x.shape[0]), self.num_train_datapoints)
+
+        self.train_batch_i = 0
+        self.val_batch_i = 0
 
 
         self.loss_type = loss_type
@@ -139,39 +144,45 @@ class MNIST(EvaluationMethod):
 
         return x,y
 
+    def get_batch_helper(self, val=False):
+
+        if not val:
+            if self.train_batch_i > self.x.shape[0] - self.train_batch_size:
+                self.train_batch_i = 0
+                if self.num_train_datapoints < self.x.shape[0]:
+                    indices = torch.randperm(self.x.shape[0])
+                    self.x=self.x[indices]
+                    self.y=self.y[indices]
+            
+            x = self.x[self.train_batch_i : self.train_batch_i + self.train_batch_size]
+            y = self.y[self.train_batch_i : self.train_batch_i + self.train_batch_size]
+            self.train_batch_i += self.train_batch_size
+            return x,y
+        else:
+            if self.val_batch_i > self.val_x.shape[0] - self.val_batch_size:
+                self.val_batch_i = 0
+            x = self.val_x[self.val_batch_i : self.val_batch_i + self.val_batch_size]
+            y = self.val_y[self.val_batch_i : self.val_batch_i + self.val_batch_size]
+            self.val_batch_i += self.val_batch_size
+            return x,y
+
+
+
 
     def eval_helper(self, policy_network, val=False):
         loss = 0
         total_intrinsic_fitness = 0
 
-        batch_size = self.val_batch_size if val else self.train_batch_size
         #print("batch size:", batch_size)
 
         total_evaled = 0
+        if val:
+           max_eval = self.val_x.shape[0]
+        else:
+           max_eval = self.num_train_datapoints
 
-        if not val:
-            all_x = self.x
-            all_y = self.y
-        else: # val
-            all_x = self.val_x
-            all_y = self.val_y
-
-        #indices = torch.arange(all_x.shape[0])
-        #if not val and not self.num_train_datapoints == 'all':
-        #    # if we are not training on all datapoints, we need to shuffle them
-        #    indices = torch.randperm(all_x.shape[0])
-
-
-        batch_i_l = list(range(math.ceil(all_x.shape[0] / batch_size)))
-        random.shuffle(batch_i_l)
-
-        # TODO add shuffling when not training on all datapoints. If just done naively, slows
-        # everything down by a lot.
-        for i,batch_i in enumerate(batch_i_l):
-            #x = all_x[indices[batch_i * batch_size:batch_i*batch_size + batch_size]]
-            #y = all_y[indices[batch_i * batch_size:batch_i*batch_size + batch_size]]
-            x = all_x[batch_i * batch_size : batch_i * batch_size + batch_size]
-            y = all_y[batch_i * batch_size : batch_i * batch_size + batch_size]
+        while total_evaled < max_eval:
+            x,y = self.get_batch_helper(val)
             #print(f"val {val}, batch {batch_i}, x.shape[0]: {x.shape[0]}, indices: {indices[batch_i * batch_size:batch_i*batch_size + batch_size]}", flush=True)
             r = policy_network(x)
             total_evaled += x.shape[0]
@@ -192,19 +203,18 @@ class MNIST(EvaluationMethod):
                 loss += -1 * first_nonzero_index(incorrect)
                 if torch.any(incorrect):
                   break
-            if (not self.num_train_datapoints == 'all') and (total_evaled >= self.num_train_datapoints): break
 
         if self.loss_type == 'num_till_death':
             loss += i + 1
         else:
             # NOTE that if batch_size does not divide N, this calculation will not be an exact mean
-            loss /= all_x.shape[0]
-            total_intrinsic_fitness /= all_x.shape[0]
-            acc = correct / all_x.shape[0]
+            loss /= total_evaled
+            total_intrinsic_fitness /= total_evaled
+            acc = correct / total_evaled
         return loss, total_intrinsic_fitness, acc
 
     # TODO lots of code duplication with MemorizationDataset
-    def eval(self, dna, cached_policy=None):
+    def eval(self, dna, val=False, cached_policy=None):
         #print("In eval", flush=True)
 
         if cached_policy:
@@ -215,21 +225,26 @@ class MNIST(EvaluationMethod):
             policy_network = self.policy_factory(dna, **self.policy_args)
 
         #print("Done", flush=True)
-        train_loss, train_total_intrinsic_fitness, train_acc = self.eval_helper(policy_network, val=False)
-        val_loss, val_total_intrinsic_fitness, val_acc = self.eval_helper(policy_network, val=True)
+        loss, total_intrinsic_fitness, acc = self.eval_helper(policy_network, val=val)
 
 
-        metadata = {
-            'train_loss': train_loss.item(),
-            'val_loss': val_loss.item(),
-            'val_acc': val_acc.item(),
-            'total_frames': self.x.shape[0], # TODO this may not be exact, 
-            'train_intrinsic_fitness': train_total_intrinsic_fitness,
-            'val_intrinsic_fitness': val_total_intrinsic_fitness,
-            }       
+        if not val:
+            metadata = {
+                'train_loss': loss.item(),
+                'total_frames': self.x.shape[0], # TODO this may not be exact, 
+                'train_intrinsic_fitness': total_intrinsic_fitness,
+                }       
+        else:
+            metadata = {
+                'val_loss': loss.item(),
+                'val_acc': acc.item(),
+                'total_frames': self.x.shape[0], # TODO this may not be exact, 
+                'val_intrinsic_fitness': total_intrinsic_fitness,
+                }       
+
         for k,v in policy_network.metadata.items():
             metadata[k] = v # TODO check no overlap?
-        return (Individual(dna, (-1*train_loss.item(), train_total_intrinsic_fitness)), metadata), policy_network
+        return (Individual(dna, (-1*loss.item(), total_intrinsic_fitness)), metadata), policy_network
 
 EvaluationMethod.register(MNIST)
 

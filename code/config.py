@@ -15,9 +15,12 @@ from distributed import LocalMultithreaded, LocalSynchronous, DistributedRabbitM
 #experiment_name = 'normal_hyperparam_search1'
 #experiment_name = 'test_exp_sigma1start_1'
 #experiment_name = 'print1'
-experiment_name = 'constant_sigma1'
+experiment_name = 'test'
 
 configs = []
+
+pool_size=None
+eval_every=200
 
 
 popsizes = [(256,1)]
@@ -60,7 +63,7 @@ num_classes = 10
 target_fitness = -1e-3 # stop when this is reached
 
 #num_train_datapoints_l = [512,2048,'all']
-num_train_datapoints_l = ['all']
+num_train_datapoints_l = [500]
 mutations = ['normal']
 #mutations = ['one']
 #sigma_mutations = [1.1] # 1 means no mutation
@@ -79,11 +82,13 @@ batch_sizes=[10000]
 #sigma_l = [0.005, 0.01, 0.02]
 #sigma_l = [0.03] # normal distribution usually equalizes at higher than 0.03 in sigma-only phase
 
-sigma_l = [(7e-3,6e-3), (2e-3,1e-3), (1e-3,4e-5)] # Can start both exponential and normal at 0.02
+#sigma_l = [(7e-3,6e-3), (2e-3,1e-3), (1e-3,4e-5)] # Can start both exponential and normal at 0.02
+# Can start both exponential and normal at 0.02
+sigma_l = [(0.001,0.001)] 
 
 sigma_only_generations_l = [-1]
 #sigma_only_generations_l = [1]
-max_generation=5000
+max_generation=500000
 
 #sigma_only_generations = 0
 #trials=1
@@ -165,6 +170,10 @@ def make_configs():
         'distributed_class': LocalMultithreaded,
         'checkpoint_every': 1000,
         'target_fitness': target_fitness,
+        'eval_every': eval_every,
+      }
+      config['distributed_args'] = {
+        'pool_size': pool_size
       }
 
       config['eval_args'] = {
@@ -190,6 +199,8 @@ def make_configs():
                   'random_seed_generator': RandomSeedGenerator(pop_init_seed),
                   'num_elites': config['num_elites'],
                   }
+
+
               
       configs.append(config)
     return (experiment_name, configs)

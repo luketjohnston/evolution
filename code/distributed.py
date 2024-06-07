@@ -16,7 +16,7 @@ class DistributedMethod(ABC):
     def __init__(self, eval_method: EvaluationMethod):
         pass
     @abstractmethod
-    def add_task(self, dna):
+    def add_task(self, dna, val=False):
         pass
     @abstractmethod
     def get_task_results(self):
@@ -27,9 +27,9 @@ class DistributedMethod(ABC):
         pass
 
 
-def worker(dna, metadata=None):
+def worker(dna, val=False, metadata=None):
   #print("In worker: ", flush=True)
-  eval_result, policy_network = worker.eval_method.eval(dna, cached_policy=worker.cached_policy)
+  eval_result, policy_network = worker.eval_method.eval(dna, cached_policy=worker.cached_policy, val=val)
   #print("worker done eval: ", flush=True)
   worker.cached_policy = policy_network
 
@@ -53,8 +53,8 @@ class LocalSynchronous(DistributedMethod):
         self.queue = queue.Queue()
         worker_initializer(self.queue, eval_fac, eval_args)
 
-    def add_task(self, dna):
-        worker(dna)
+    def add_task(self, dna, val=False):
+        worker(dna, val=val)
 
     def get_task_results(self):
         while True:
@@ -77,10 +77,10 @@ class LocalMultithreaded(DistributedMethod):
         self.queue = mp.Queue()
         self.pool = mp.Pool(pool_size, initializer=worker_initializer, initargs=(self.queue, eval_fac, eval_args))
 
-    def add_task(self, dna, metadata=None):
+    def add_task(self, dna, val=False, metadata=None):
 
         #print("Applying async", flush=True)
-        self.pool.apply_async(worker, (dna, metadata))
+        self.pool.apply_async(worker, (dna, val, metadata))
         #print("Done applying async", flush=True)
 
     def get_task_results(self):
@@ -99,6 +99,7 @@ class LocalMultithreaded(DistributedMethod):
 DistributedMethod.register(LocalMultithreaded)
 
 # TODO update with eval_fac and eval_args, like localMultithreaded above etc
+# TODO update with val
 class DistributedRabbitMQ(DistributedMethod):
     def __init__(self, eval_method: EvaluationMethod, is_master=True):
         # don't do anything with the evaluation method - will have to setup workers elsewhere
@@ -118,12 +119,12 @@ class DistributedRabbitMQ(DistributedMethod):
         self.is_master = is_master
         self.eval_method = eval_method
 
-    def add_task(self, dna):
+    def add_task(self, dna, val=False):
         assert self.is_master
         self.channel.basic_publish(
             exchange='',
             routing_key='task_queue',
-            body=dna.serialize(), 
+            body=dna.serialize(val), 
             properties=pika.BasicProperties(
                 delivery_mode=pika.DeliveryMode.Persistent
             ))

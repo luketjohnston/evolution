@@ -90,15 +90,52 @@ of these three. When training this way, we can see how the values of sigma for e
 As expected, the sigmas decrease over training. Additionally, notice how the light blue curve has much higher swings than the other curves.
 That is because this curve uses gamma=1.3. Most of the curves on this graph use gamma=1.05. The gray curve uses gamma=1.1.
 
-Now, we need to make sure that letting sigma mutate like this is actually better than just training with a constant sigmas. We compare
+Now, check how letting sigma mutate like this compares to just training with a constant sigmas. We compare
 training with gamma=1.05 to training with gamma=1 (no sigma mutation) and constant values of sigma taken from the beginning of these
 curves, the middle, and the end.
 
+![plot](./images/constant_vs_mut_sigma.png)
 
-TODO insert graph showing mutating lr vs constant lr
+In the above image, the red curve and blue curves are training runs with gamma=1.05. The gray, green, and pink curves are respectively
+training runs with constant sigmas taken from the beginning, middle, and end of the curves above. We can see that while the red run
+does perform the best, there is some variance in training runs, and it is unclear that training with gamma=1.05 outperforms simply training
+with a constant middling sigma. However, it does perform at least as well.
 
 Note I have not tested whether a tuned learning rate schedule will outperform this self-scheduling mutation.
 
 ### Batch Sizes
 In all of the above experiments, to evaluate the fitness of the model, I compute its loss over the entire MNIST training dataset.
 In this section I will investigate what happens when we use minibatches to evaluate the model instead of the entire training dataset.
+It is impractical for most domains to evaluate on the entire training set, so performance on smaller batches is important.
+
+If we simply scale down the number of training datapoints each individual is evaluated on, and mantain the same sigma mutation scheme,
+performance rapidly degrades and the algorithm stops converging. In the below graphs, orange uses the full 60k mnist training dataset to 
+eval individuals, and red, light blue, gray, and dark blue eval on only 10000, 1000, 500, and 500 images respectively (each set of images
+is randomly sampled from the training dataset for each evaluation). We can see that performance degrades when using smaller subsets,
+and at batch sizes of 500, there is high variance and instability throughout training. 
+
+![plots](./images/batches1.png)
+
+Looking at the graphs of how sigma1 changes 
+throughout training, it appears that our sigma mutation scheme may be overestimating the optimal sigma when using smaller batch sizes:
+
+![plots](./images/batches1_sigma.png)
+
+This makes sense - it is much easier to optimize with respect to a small batch than with respect to the entire training distribution, 
+so the optimal learning rate for the loss landscape of a single batch will be much higher than the optimal learning rate with respect 
+to the loss landscape of the entire training distribution. To test this hypothesis, I try training without sigma mutation (gamma=1.0),
+still evaling on only 500 images,
+and with a fixed and small values for sigma1 and sigma2 - the green curve in the graphs below (which also contain the curves displayed 
+above, for comparison):
+
+![plots](./images/smallbatch_constant_lr.png)
+
+We can see that this curve looks much nicer than the gray and blue curves, supporting the hypothesis that the our learning rate mutation
+scheme does not work well when using minibatches. However, this curve still does not converge. In fact, the best fitness of a single
+batch converges to 1: 
+![plots](./images/smallbatch_constant_lr_bestfitness.png)
+
+But this is not reflected in the average training accuracy, and when evaling the resulting model on the valset, the valset fitness matches
+the training fitness (not the "best fitness" of this single batch of 500).
+
+

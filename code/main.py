@@ -56,6 +56,7 @@ if __name__ == '__main__':
         if sys.argv[1] in ['quicktest','q']:
             config['save_prefix'] = 'quicktest'
             config['distributed_class'] = LocalSynchronous
+            config['distributed_args'] = {}
 
         target_fitness = config['target_fitness']
         best_fitness = (-99999999999999,0) # TODO make more general
@@ -70,7 +71,7 @@ if __name__ == '__main__':
         os.makedirs(tracking_address, exist_ok=True)
         writer = SummaryWriter(log_dir=tracking_address)
 
-        with config['distributed_class'](config['eval_fac'], config['eval_args'], is_master=is_master) as task_manager:
+        with config['distributed_class'](config['eval_fac'], config['eval_args'], is_master=is_master, **config['distributed_args']) as task_manager:
             if not is_master:
                 print("About to call task_manager.start_worker!", flush=True)
                 task_manager.start_worker()
@@ -87,7 +88,7 @@ if __name__ == '__main__':
                 #        )
 
                 for child in population.children:
-                    task_manager.add_task(child)
+                    task_manager.add_task(child, val=False)
 
                 true_start_time = time.time()
                 last_time = time.time()
@@ -105,7 +106,10 @@ if __name__ == '__main__':
                      if 'val_loss' in metadata:
                          best_val_loss = min(metadata['val_loss'], best_val_loss)
                          best_val_acc = max(metadata['val_acc'], best_val_acc)
-                         #print(f'best_val_loss: {best_val_loss}, val_loss: {metadata["val_loss"]}')
+                         writer.add_scalar('best_val_loss', best_val_loss, generation)
+                         writer.add_scalar('best_val_acc', best_val_acc, generation)
+                         print("FOUND VAL LOSS")
+                         continue
                      total_frames += metadata['total_frames']
                      ave_policy_make_time += metadata['policy_make_time'] 
                      #print(metadata,flush=True)
@@ -139,8 +143,6 @@ if __name__ == '__main__':
                          writer.add_scalar('ave_fitness', ave_fitness, generation)
                          writer.add_scalar('ave_intrinsic_fitness', ave_intrinsic_fitness, generation)
                          writer.add_scalar('best_fitness', best_fitness[0], generation)
-                         writer.add_scalar('best_val_loss', best_val_loss, generation)
-                         writer.add_scalar('best_val_acc', best_val_acc, generation)
                          writer.add_scalar('best_fitness_intrinsic', best_fitness[1] - math.floor(best_fitness[1]), generation)
                          writer.add_scalar('total_frames', total_frames, generation)
                          writer.add_scalar('sigma1', best_metadata['sigma1'], generation)
@@ -148,6 +150,10 @@ if __name__ == '__main__':
                          writer.add_scalar('generation_elapsed_time', time.time() - last_time, generation)
                          last_time = time.time()
 
+                         # add an eval step 
+                         if generation % config['eval_every'] == 0:
+                             print("ADDING EVAL STEP")
+                             task_manager.add_task(best_dna, val=True)
 
 
                          if generation == 0:

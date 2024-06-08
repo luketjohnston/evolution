@@ -8,6 +8,15 @@ from evaluations import MemorizationDataset, NTimes, MNIST
 from common import RandomSeedGenerator
 from distributed import LocalMultithreaded, LocalSynchronous, DistributedRabbitMQ
 
+
+distributed_class = LocalMultithreaded
+distributed_args =   {
+        'pool_size': None
+      }
+
+distributed_class = LocalSynchronous
+distributed_args = {}
+
 #experiment_name = 'num_train_datapoints_2'
 #experiment_name = 'normal_faster_maybe'
 #experiment_name = 'normal_with_starting_002'
@@ -15,11 +24,10 @@ from distributed import LocalMultithreaded, LocalSynchronous, DistributedRabbitM
 #experiment_name = 'normal_hyperparam_search1'
 #experiment_name = 'test_exp_sigma1start_1'
 #experiment_name = 'print1'
-experiment_name = 'test'
+experiment_name = 'sync_constant_b500_6'
 
 configs = []
 
-pool_size=None
 eval_every=200
 
 
@@ -54,7 +62,7 @@ print(f"Using device {device}")
 factory,name = (LinearPolicy, 'mlp')
 eval_factory,eval_name=(MNIST,'mnist')
 input_dims=[28,28,1] # mnist
-trials = 1
+trials = 100
 kernel_dims = [3,3]
 channels = [1,32,64]
 strides = [1,1,1]
@@ -88,7 +96,7 @@ sigma_l = [(0.001,0.001)]
 
 sigma_only_generations_l = [-1]
 #sigma_only_generations_l = [1]
-max_generation=500000
+max_generation=2000
 
 #sigma_only_generations = 0
 #trials=1
@@ -113,6 +121,7 @@ def make_configs():
       child_population_size, parent_population_size = popsize
 
       initialization_seed = random.randint(0,9999999)
+      #initialization_seed = 4700485
       pop_init_seed = initialization_seed
 
       # TODO any way to scale these the same way?
@@ -149,7 +158,7 @@ def make_configs():
           'initialization_seed': initialization_seed,
           'mutation': mutation,
           'device':device,
-          'sigma_mutation': sigma_mutation, # 1 means no mutation
+          'sigma_mutation': sigma_mutation, 
           'sigma_only_generations': sigma_only_generations,
 
           }
@@ -167,14 +176,13 @@ def make_configs():
         'child_population_size': child_population_size,
         'save_prefix': save_prefix,
         'max_generation': max_generation,
-        'distributed_class': LocalMultithreaded,
+        'distributed_class': distributed_class,
         'checkpoint_every': 1000,
         'target_fitness': target_fitness,
         'eval_every': eval_every,
+        'pop_init_seed': pop_init_seed,
       }
-      config['distributed_args'] = {
-        'pool_size': pool_size
-      }
+      config['distributed_args'] = distributed_args
 
       config['eval_args'] = {
               #'input_dims': input_dims, 
@@ -196,7 +204,7 @@ def make_configs():
                   'dna_class': BasicDNA, 
                   'parent_population_size': config['parent_population_size'], 
                   'child_population_size': config['child_population_size'],
-                  'random_seed_generator': RandomSeedGenerator(pop_init_seed),
+                  'random_seed_generator': RandomSeedGenerator(pop_init_seed), # TODO move this object so we can pickle the entire config
                   'num_elites': config['num_elites'],
                   }
 

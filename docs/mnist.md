@@ -28,7 +28,7 @@ And in the section "Fitness types" below we will investigate using other types o
 
 The paper linked above generated the perturbations by sampling from a
 normal distribution with mean 0 and standard deviation sigma. 
-However it is not clear that this is the distribtuion from which to sample parameter mutations.
+However it is not clear that this is the best distribution from which to sample parameter mutations.
 So this section will investigate if any other distributions perform better.
 
 Initially, I decided to inspect the distribution of the partial derivatives over all parameters during normal SGD, and use
@@ -128,14 +128,6 @@ still evaling on only 500 images,
 and with a fixed and small values for sigma1 and sigma2 - the green curve in the graphs below (which also contain the curves displayed 
 above, for comparison):
 
-![plots](./images/smallbatch_constant_lr.png)
 
-We can see that this curve looks much nicer than the gray and blue curves, supporting the hypothesis that the our learning rate mutation
-scheme does not work well when using minibatches. However, this curve still does not converge. In fact, the best fitness of a single
-batch converges to 1: 
-![plots](./images/smallbatch_constant_lr_bestfitness.png)
-
-But this is not reflected in the average training accuracy, and when evaling the resulting model on the valset, the valset fitness matches
-the training fitness (not the "best fitness" of this single batch of 500).
-
+WORKING ON THIS, original graph had a bug I think
 

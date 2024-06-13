@@ -4,7 +4,7 @@ import functools
 import math
 import torch
 import time
-from codes import BasicDNA # TODO shouldnt have to do this
+from evolution.src.codes import BasicDNA # TODO shouldnt have to do this
 
                 ## randomly pick two axes, generate 2d rotation matrix
                 #a1,a2 = torch.randint(self.heads,size=(2,), generator=self.generator)

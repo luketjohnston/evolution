@@ -1,9 +1,10 @@
-from common import Individual, first_nonzero_index
+from evolution.src.common import Individual, first_nonzero_index
+import os
 import math
 import random
 import torch
 import torchvision
-from policies import LinearPolicy, ConvPolicy
+from evolution.src.policies import LinearPolicy, ConvPolicy
 from abc import ABC, abstractmethod
 import time
 import gymnasium as gym
@@ -103,6 +104,7 @@ class MNIST(EvaluationMethod):
             #torchvision.transforms.CenterCrop(10),
             torchvision.transforms.ToTensor(),
         ])
+        #print("IN EVAL INIT", flush=True)
 
         self.x, self.y = self.loader_helper(train=True)
         self.val_x, self.val_y = self.loader_helper(train=False)
@@ -116,11 +118,12 @@ class MNIST(EvaluationMethod):
         self.train_batch_i = 0
         self.val_batch_i = 0
 
-
         self.loss_type = loss_type
         assert loss_type in ['num_incorrect', 'cross_entropy', 'num_till_death']
 
     def loader_helper(self, train=True):
+        # TODO should I shuffle after loading?
+        #print("IN LOADER HELPER", flush=True)
         string = 'train' if train else 'val'
         if not self.load_from_file:
             data = torchvision.datasets.MNIST('./data/mnist', download=True, train=train, transform = self.transform)
@@ -145,11 +148,16 @@ class MNIST(EvaluationMethod):
         return x,y
 
     def get_batch_helper(self, val=False):
+        assert self.x.shape[0] == 60000
+        assert self.val_x.shape[0] == 10000
 
         if not val:
+            #print(f"train_batch_i: {self.train_batch_i}")
             if self.train_batch_i > self.x.shape[0] - self.train_batch_size:
+                #print("setting train_batch_i = 0")
                 self.train_batch_i = 0
                 if self.num_train_datapoints < self.x.shape[0]:
+                    print('shuffling')
                     indices = torch.randperm(self.x.shape[0])
                     self.x=self.x[indices]
                     self.y=self.y[indices]
@@ -157,6 +165,8 @@ class MNIST(EvaluationMethod):
             x = self.x[self.train_batch_i : self.train_batch_i + self.train_batch_size]
             y = self.y[self.train_batch_i : self.train_batch_i + self.train_batch_size]
             self.train_batch_i += self.train_batch_size
+            # assert x.shape[0] == 500 this is always true
+            # print(y) y does appear random
             return x,y
         else:
             if self.val_batch_i > self.val_x.shape[0] - self.val_batch_size:
@@ -194,6 +204,11 @@ class MNIST(EvaluationMethod):
 
             if self.loss_type == 'cross_entropy':
                 loss += torch.nn.functional.cross_entropy(r, y, reduction='sum')
+                #if loss < 5:
+                #    print(torch.sum(x))
+                #    print(y)
+                #assert x.shape[0] == 500 # this is always true
+                #print(f"loss: {loss}, x.shape: {x.shape}")
                 # compute acc
                 #loss += torch.nn.functional.cross_entropy(r, y)
             elif self.loss_type == 'num_incorrect':

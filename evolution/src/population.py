@@ -1,4 +1,4 @@
-from common import Individual
+from evolution.src.common import Individual
 from sortedcontainers import SortedList
 import random
 from abc import ABC, abstractmethod

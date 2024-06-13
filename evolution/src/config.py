@@ -1,12 +1,12 @@
-from policies import ConvPolicy, LinearPolicy, MultiConv, MemorizationModule, MemorizationModuleWithLR, MemorizationModuleWithLRFull, MemModuleBasic
+from evolution.src.policies import ConvPolicy, LinearPolicy, MultiConv, MemorizationModule, MemorizationModuleWithLR, MemorizationModuleWithLRFull, MemModuleBasic
 from itertools import product
 import torch
-from codes import BasicDNA
+from evolution.src.codes import BasicDNA
 import random
-from population import Sexual, EliteAsexual
-from evaluations import MemorizationDataset, NTimes, MNIST
-from common import RandomSeedGenerator
-from distributed import LocalMultithreaded, LocalSynchronous, DistributedRabbitMQ
+from evolution.src.population import Sexual, EliteAsexual
+from evolution.src.evaluations import MemorizationDataset, NTimes, MNIST
+from evolution.src.common import RandomSeedGenerator
+from evolution.src.distributed import LocalMultithreaded, LocalSynchronous, DistributedRabbitMQ
 
 
 distributed_class = LocalMultithreaded
@@ -14,17 +14,10 @@ distributed_args =   {
         'pool_size': None
       }
 
-distributed_class = LocalSynchronous
-distributed_args = {}
+#distributed_class = LocalSynchronous
+#distributed_args = {}
 
-#experiment_name = 'num_train_datapoints_2'
-#experiment_name = 'normal_faster_maybe'
-#experiment_name = 'normal_with_starting_002'
-
-#experiment_name = 'normal_hyperparam_search1'
-#experiment_name = 'test_exp_sigma1start_1'
-#experiment_name = 'print1'
-experiment_name = 'sync_constant_b500_6'
+experiment_name = 'june11'
 
 configs = []
 
@@ -32,7 +25,6 @@ eval_every=200
 
 
 popsizes = [(256,1)]
-#popsizes = [(3,1)]
 
 #input_dims=[64,64,3]
 #input_dims=[128]
@@ -71,20 +63,18 @@ num_classes = 10
 target_fitness = -1e-3 # stop when this is reached
 
 #num_train_datapoints_l = [512,2048,'all']
-num_train_datapoints_l = [500]
+num_train_datapoints_l = ['all']
 mutations = ['normal']
 #mutations = ['one']
 #sigma_mutations = [1.1] # 1 means no mutation
 #sigma_mutations = [1.05] # 1 means no mutation
-sigma_mutations = [1.0] # 1 means no mutation
+sigma_mutations = [1.05] # 1 means no mutation
 
 batch_sizes=[10000]
 
-#sigma_only_generations = 100
 # NOTE that the base sigma still cannot be too high or else it will not be able to even find
 # which direction it needs to mutate in. May  be worth investigating which layer this effect
 # is more important for
-#sigma_only_generations = 200
 #max_generation=2000
 
 #sigma_l = [0.005, 0.01, 0.02]
@@ -92,11 +82,11 @@ batch_sizes=[10000]
 
 #sigma_l = [(7e-3,6e-3), (2e-3,1e-3), (1e-3,4e-5)] # Can start both exponential and normal at 0.02
 # Can start both exponential and normal at 0.02
-sigma_l = [(0.001,0.001)] 
+sigma_l = [(0.0001,0.0001)] 
 
 sigma_only_generations_l = [-1]
 #sigma_only_generations_l = [1]
-max_generation=2000
+max_generation=200000
 
 #sigma_only_generations = 0
 #trials=1

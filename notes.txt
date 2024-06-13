@@ -1,4 +1,35 @@
-IMPORTANT: make sure GA handles biases correctly
+IDEA: 
+generate completely random neural networks until we get a high-performing one on mnist.
+If it generalizes, then we can say that gradient descent has no effect on generalization ability,
+and instead it is probably due to the "number of generalizing networks" for 
+certain data distributions.
+One way to think about this would be compression - the maximally-compressed network has the most
+"free variables" and hence takes up the most volume in the high-dimensional manifold of its parameters.
+
+TODO: try, instead of finding the best mutation by evaling each mutation on the full trainset,
+just randomly mutating and choosing the one that has highest cosing similarity with the gradient. See if it 
+performs better / worse / same as full GA.
+
+TODO include hyperparams in save .pkl 
+
+List of main experiment ideas:
+
+| TODO: try adding some loss term that enforces a particular order on the features learned,
+| then see if we can interpolate between different networks trained with that norm
+| to test if it works. Toward the eventual goal of allowing multiple modules to learn
+| and interface together.
+| 
+| Add biases to GA mutation, figure out right mutation schemes
+| 
+| Continue to try smaller LR mutation rates to find the optimal one
+| 
+| Try LR mutation with a smaller generation (or fixed with higher generation) to isolate effects of each
+| 
+| Experiment with different types of mutation again to verify that exponential is performing better than normal
+| 
+| Experiment with different values for lambda in the exponential network
+| 
+| Instead of mutating parameters directly, mutate how they change with each minibatch (a hebbian rule, for example)
 
 The really long run is NOT a multi, it is misnamed
 
@@ -58,9 +89,6 @@ function will out-compete others. Then, only the unimportant elements will mutat
 new fronteirs
 
 
-TODO: investigate whether environment random seed matters for evaluations etc. 
-Seems like everytime I eval I get the same result?
-
 Roms are installed: /Users/luke/Library/Python/3.9/lib/python/site-packages/AutoROM/roms
 
 
@@ -86,7 +114,7 @@ Things to think about
 in the network etc?
 2. Sexual selection - how can agents choose their mates?
 3. Diversity - how can we enforce some diversity constraints?
-   --- there may be a way to enforce this by un-enforcing the opposite - 
+   --- there may be a way to enforce this by penalizing the opposite - 
    organism that are too non-diverse die out
 4. think about global competition - in real life, organism succeed by finding NEW niches, not by
 dominating an existing one (diversifying). one idea is to compete *locally*, vs only similar solutions
@@ -143,7 +171,7 @@ amount of resources (money or time). Possible solutions:
 3. change the way in which networks mutate, to be faster.
    - instead of mutating entire network, mutate one layer? reduces time by factor of (network depth). can we do this without
    increasing total generations required (or possibly even decreasing it?)
-^^^ THE ABOVE IS SOLVED ^^^
+^^^ THE ABOVE IS SOLVED ^^^ (for some modules, not all)
 
 
 Random (not really related) thought: What if where was a way to enforce a standard ordering on network parameters?
@@ -189,6 +217,17 @@ And outputs:
 Could have other networks in there, for example one that takes as input all the channels at a given
 location over multiple input images, and outputs an adjustment to all input weights etc
 
+Random idea:
+there are two elements of the brain.
+The thing that senses
+The thing that acts
+
+-- If the thing that acts, can learn to operate with arbitrary types of senses, then the thing that senses
+can evolve independently to just sense better (add more vision neurons, add more abstraction, add "memories" 
+to the sensation if visual input triggers something encountered before, etc)
+-- the thing that acts just has to be able to act with arbitrary sensual input (which it clearly must adapt
+to over time, since it is arbitrary).
+
 
 Random papers:
 https://www.nature.com/articles/s41567-023-02332-9
@@ -212,7 +251,7 @@ another mutation that causes future children to die if their mutation rate incre
 it would be possible to NEVER see that parameter change again. 
 
 Put more simply - if a mutation is slightly bad, it is to the population's advantage to weed it out early, before it 
-randomly propogates (and consumes resources). This could be accomplished with some form of sexual selection also.
+randomly propogates (and consumes resources). This could be accomplished with some form of sexual selection also. ***
 
 I think the first thing we should try is just the most basic "mutating learning rate". Keep a lr for each parameter, mutate
 it at some constant rate, pass it through some function that maps it to [0,inf] (probably e^x), and then use it to mutate. Let's do it!
@@ -283,4 +322,455 @@ Let's consider this solution again:
 - memories are unit vectors
 Somehow, memories determine logits for each action. The closer a memory is to a query, the higher its logit is.
 Then, selection pressure at the population level will move each memory closer to the query.
+
+
+What if we just scale up the number of memories a lot? Then we can randomly mutate to add in vectors that dont change much,
+more likely to eventually get ones that are close to correct
+TODO think about if this still has problems once we need to remember more things
+
+The downside of this whole memory mechanism is the following:
+suppose we have a bunch of dogs in an area with one cat
+we can randomly mutate a couple memories in this "dog" area that classify the whole area as dog.
+Then, how do we learn a single memory for the cat?
+well, even if we randomly mutate to have exactly the cat vector, we may not learn it if it overwrites the 
+correct "dog" classification for some other nearby vector. 
+So we would be relying on random mutations to build up in this "dog" area over a long time, without any
+selective pressure to do this, until it is "safe" for the cat memory to mutate because it will no longer
+disturb the correct classification of any dog memories.
+
+Experiment:
+train some MemModuleBasic to -0.5 loss, which means there is a single datapoint incorrectly classified.
+I tested how many memory modules are being used to classify the other 63 datapoints, and it is 63. This was initially
+surprising to me, I thought there might be a couple that are classified correctly, but I think what is happening is that
+none of the memories are actually that close to the datapoints, they are just closer than any other memory, and 
+there are so many dimensions that it is keeps being possible to find some smaller and smaller subspace of the sphere
+that is closest to the target and that doesn't interfere with any other memories. TODO this is something we could experimentally/mathematically
+verify. So once we get to 63, the subspace that's left is very small (or possibly nonexistent, TODO check).
+The experiment I tried here so far is to just take a memory that isn't being used, set it to exactly equal the desired target memory, and 
+see what happens. What happens is that the total number of correctly classified memories drops massively from 63 to 37. 
+
+
+Plan:
+1. make memmodule that mutates each memory instead of totally replacing it, keeping the memory normalized
+2. add some kind of intrinsic reward which rewards how close the closest memory is to the input
+-> this should be enough to stop getting "stuck" at the end, I think, and learn all datapoints faster
+
+TODO redo some experiments, I had done them with sexual instead of asexual by accident
+
+
+Did the above, it works, can learn 64 with 64memheads pretty fast (500 generations was the fastest I saw)
+Still occasionally will get stuck on the last step, I am guessing because each memory is only updated 1/64 * pop_size
+per generation (so once for my current settings). curious what happens if we just update all the memories
+
+Alright looking at some runs with the above and various sigmas, sigma=1 seems to be the best! Maybe sigma3 also good but 
+I'm inclined to leave it at sigma 1
+
+let's do a quick "mutate all memories at once" experiment -> doesn't seem to work very well
+
+WE need to speed up the random mutation right now. The "add a random normal and then normalize" is difficult to invert
+so I'm going to move to another scheme:
+1. generate a random (invertible) rotation. We can do this for uniform rotations, not sure how to restrict them
+Maybe just generate some basis set of rations (all pairs of 2 coordinate systems, seems kinda overkill and would take a long time)
+
+Other ideas...
+1. provide some mechanism for reducing the size of a chromosome ( mutations that remove old mutations )
+ --- need some intrinsic incentive for this, 
+     
+
+Maybe let's just work on something else for a bit..
+
+Tradeoff with sigma: small values of sigma allow fitness to increase faster for good memories. BUT they make it much harder for not-good
+memories to improve to be useful (need to get there with a random walk, not really feasible)
+-- potential solution is to sometimes mutate entirely new vectors (in addition to the small sigma mutations)
+
+Current thoughts: could just move around in Rn space (not on sphere), but still normalize before computing distance, 
+problem here is just to prevent exploding norms, could use a torus space
+
+Also had a thought that could dynamically determine the step size for updates by looking at the moving average of recent step sizes,
+and then increasing/decreasing by some power factor. The idea is if a lower learning rate is more likely to improve the
+fitness, then updates that actually do improve the fitness will be more likely to have had a lower learning rate, and the
+baseline will adjust
+
+
+IMPORTANT OBSERVATION:
+when we start with a randomly initialized memory bank, learning is much slower than when we start from 0.
+I suspect this is because with a randomly initialized bank, there is a starting vector that is "close" to 
+every datapoint, but the vector is probably labeled incorrectly. Then when mutating, you have to mutate
+a vector that is closer than the randomly initialized vector (~1/64 chance), AND that is labeled correctly (1/10).
+So only 1/640 mutations will improve things (10 generations). 
+We also observe that when training from randomly initialized memories, the intrinsic fitness DECREASES over time. 
+(with the random resetting of memories, not random perturbation)
+This seems to mean that usually when mutating we are moving a close vector away (presumably to improve 
+another vector some small amount)
+What if instead of mutating target and memory at once, we mutate either or?
+
+
+Basically, whenever we have an "incorrect" memory close to a datapoint, in order to improve we need to do one of two things:
+1. randomly select this memory to mutate, and mutate the class to be correct
+2. random mutate another memory even closer than this one (and class correct)
+Basically, the closer an incorrect memory is, the harder it is to improve. there is a tradeoff here in that the faster memories
+mutate, the easier it is to remove bad memories (and replace them), but the harder it is for our intrinsic fitness to take effect
+and keep memories close to their correct values. Intrinsic fitness as we've defined it now actually makes this even worse,
+since it moves even incorrect memories close to their datapoints.
+
+Basically we need another intrinsic fitness which is "number of used memories." and we need to often mutate deletions.
+
+three possibly ways to mutate:
+1. select an unused memory, randomly mutate it, randomly assign a class
+2. select a memory and delete it
+3. select a used memory and randomly perturb it.
+Eventually there could be mechanisms whereby the frequencies of each of these options can evolve too, but no need for that at the beginning.
+TODO ive never tried just transmitting the full network state, it might be faster than regenerating all the time... 
+
+Weirdly, when I look at how fast the intrinsic fitness increases with different values of sigma, the value of sigma that increases the 
+intrinsic fitness the fastest is not the one that increases the overall fitness the fastest. Not sure what the hell to make of this
+
+Alright I think it's time to just start working on the next step whatever that may be.
+
+Brainstorming:
+1. setup another toy environment, where we have to both memorize random noise as well as learn some function approx. 
+i.e. learn cifar as well as memorize random.
+--- downside - may take a long time to test this, we might need lots of datapoints for cifar.
+Can we make a similar test that doesn't require so much data? Some small set of 32 datapoints that we know can't be
+memorized by the memorization module?
+--maybe a small dataset of images where we just need to count the ones or something like that and take mod 10
+-- maybe something simpler, just ten "images" one for each class that can appear anywhere
+-- could also just use mnist and evaluate on a subset of images each time for speed
+   -> let's just start with this
+
+TODO setup an aws instance so I can easily spin up more experiments in parallel
+c7g.2xlarge seems to be similar to my macbook, cost 0.1$/hr
+
+Can we visualize the gradient updates at every step and then see what sort of mutations could reproduce them?
+
+What was my thought process running with higher pop... the the rational was, if we just eval on 64 datapoints every time,
+the most fit individuals will always be the most lucky onesa, and luck is too likely to completely outcompete any other
+beneficial mutations. In retrospect this could still be true even after increasing the pop size. It seems like if
+half the pop is making it through every generation then there would still be a pretty large signal from just 
+improving at the actual task rather than random chance, so not sure what's going on here...
+Are there some conflicting effects?
+- the higher percent of each generation that has children, the higher likelihood that "good" mutations will not
+be overriden by random chance. But at the same time, the LOWER the proportion of the following generation will
+contain mutations from this parent, so the more difficult it is for this beneficial mutation to survive.
+
+This is assuming each descendant has 1 parent. If we have 2 parents per offspring, we can basically double
+the number of offspring an individual can have while still keeping the pop the same size (but we half the 
+influence on the offspring from each parent)
+--- we could test our theories by doing GA like we are currently doing it, but also evaling on the entire set,
+and then tracking which beneficial mutations get overriden by random chance over time. TODO
+
+random idea, multiple populations evolving independently and occasionally recombining?
+
+TODO add bias FFS, or if not you have to check that your non-bias implementation still works with gradient ascent
+
+
+The question we want to answer is WHY GA gets stuck somewhere when trying to learn mnist. Experiments to try:
+
+1. eval on larger amounts of mnist at a time. 
+Result: larger amounts of eval -> better performance at convergence
+
+2. eval on full mnist. Does it converge?
+
+3. given a training with a sequence of mutations, eval each mutation on the full mnist set, and 
+determine whether good mutations just stop being found, or if bad mutations are overwriting good
+mutations at too fast a rate.
+
+4. train with GD, make sure our architecture is all set up correctly.
+6. Try to get some context for the mnist loss we are getting - what is a good loss?
+
+5. train with GD, look at what the parameter updates look like, to gain ideas for how to mutate in GA
+--- maybe simplify this to just a single fully connected layer and investigate that...
+
+7. Check if we are generalizing at all (add a validation set on mnist)
+
+8. We already tried lots of different values of sigma and didn't find it to be all that important
+
+
+Ok let's order these. I think I want to do (4) first, it seems like the best sanity check
+And I suppose there's no point in ordering the rest until I get results from 4, who knows what we might learn
+
+Findings from (4):
+1. normalization of mnist images is important (speeds up convergence a lot)
+2. loss should go to 0. Currently with Adam 0.001, 4 epochs to 99% valset acc and 0.02 train loss.
+With SGD lr 0.1, can take as few as 3 epochs to 99% acc and 0.03 val loss!
+3. one epoch of batches of size 64 takes 937 batches, so 937 steps. So even if GA is as fast as 
+SGD, it will still take about 6k generations to get to .02 (in 1k it should get to val loss of .07 and 
+97% acc)
+
+Next step is to look at the parameter updates that SGD is performing and see if we can glean anything
+interesting thereby.
+
+Investigating the gradients, they clearly fail the shapiro test for normality. What distribution(s)
+should we use instead to approximate them?
+Findings from (5):
+gradient updates follow a loosely exponential distribution (for weights). When I approximate 
+this distribution with GA, still doesn't work very well. 
+
+Think the next step is to simplify further, go to a single MLP, and figure out the best way to do
+GA (rather than just randomly using the normal distribution)
+
+Generating ideas for ways to update:
+1. update only a single layer at a time? 
+2. update only a single parameter at a time? Still follow exponential distribution
+3. Can actually learn an algorithm for updating the weights (complicated) 
+   -- real life organisms probably do not encode all synaptic connections and weights in DNA,
+      more likely they learn various rules for how to update synapses 
+   how would this work: 1
+   1. mutate the rule
+   2. run network on a batch, use the rule to update weights for that single batch
+   3. run again on that batch, see if improved after update. Organisms that improve the most
+      reproduce
+   4. This requires storing all the network weights
+   5. But once the rule is learned, can use it in future attempts
+
+There are two unknowns:
+1. how much does the inaccurrate estimate of fitness due to one minibatch affect things?
+   if we do this experiment and find that we are able to learn entirely, then what does this tell us?
+   that somehow the best random mutation on a minibatch is significantly different than the gradient 
+   direction for that minibatch, despite the random mutations being able to recover the gradient exactly.
+   Seems unlikely - more likely that the way we are mutating is just very unlikely to uncover the correct
+   gradient direction.
+2. what is the best way to mutate parameters when we don't have a gradient?
+
+
+Three possible failure modes:
+1. It reaches a point where it stops generating updates that increase fitness. Possibly lr too high,
+possibly loss landscape too sharp
+2. Updates that increase fitness are being generated but not being passed down
+3. updates that increase fitness are being generated and passed down, but updates that decrease fitness
+are being passed down just as often.
+4. I suppose a fourth possibility is that it continually increases fitness, but the increases are so 
+small
+
+1. can be tested by looking at a save, and trying to generate updates for all the seeds near the end.
+If we can randomly generate one that increases fitness then we can negate 1. 
+3. If we look at a late save and evaluate each mutation on the full set, and if fitness increases
+and decreases, then we can verify 3
+2. We can additionally look at a late save and see if we can generate an update that increases fitness
+(with the params the training was using). 
+
+We have weak evidence against (2) since when we increase the number of datapoints we eval fitness on,
+it doesn't entirely fix the problem (this should make fitness on a batch more closely match global 
+fitness, and hence they should be passed down)
+
+Another thing we could try is to generate the actual gradient, and then try different sigmas with
+that gradient. See if the sigma we are using is just too large at the end
+
+
+OK after optimizing the eval on MNIST a lot, we can run experiments faster and this is what I've found:
+- Loss does seem to approach 0 with exponential updates. Does not approach 0 with the "one" updates that I have tried so far.
+- it is the case the higher sigma results in faster learning initially but slower learning later. 
+
+-- seems like a no-brainer to implement some kind of lr mutation, to allow the algorithm to update the lr
+as it goes.
+
+-- Another idea is to actually figure out the ground truth optimal LR scheduling. How do we do this?
+Do a trial run where at every fitness level, we compute the next generation at a few different learning
+rates, and then we save the lr that has the best performing child. Then we can setup a lr schedule,
+run a GA with that lr schedule, and use that as our baseline when implementing the lr mutation.
+Let's just bite the bullet and implement this thing
+
+Problem with the sigma updating is that it makes my efficient network reconstruction not work very well.
+
+Initial results from the LR mutation show it to do better than most other schedules, at least early.
+It doesn't do *that* much better than just keeping a constant 0.03 lr. And I am also curious if even 
+lower constant learning rates will eventually surpass it
+
+Another experiment we also need to try is trying the lambda mutation with the same generation size. Because
+right now I'm using a higher generation count, which could explain why the curve is better.
+Alternatively, try a fixed sigma at the higher parent count.
+
+Hypothesis: the sigma mutation as I have implemented is decreasing sigma too quickly.
+Supporting evidence: a constant .03 sigma converges much slower at the beginning, but faster at the end,
+than my sigma mutation method.
+Are there any other alternative possibilities? Sigma mutation could be optimal and just random variance in runs
+causes this. Can just run a few trials
+I think we can just assume this hypothesis is true for now. What we need to figure out is WHY it is decreasing
+too quickly. 
+Hypotheses:
+1. The loss landscape is generally very sharp, with a few directions sharply increasing for a large update,
+many more moderately increasing for small updates only, and most decreasing. This means that the optimal strategy
+is often to just wait and keep rerolling updates until we hit the correct direction, and we want to have the largest
+possibly magnitude when we do hit it. However in practice what will happen is that if we don't hit the best update in 
+one generation, then the offspring with lower mutation rates will dominate.
+--- test: plot the distribution of fitness levels after a single mutation at various learning rates for a given save.
+          We should be able to verify emperically pretty easily if this is what is going on.
+
+Idea - examine the distribution of weights connected to single neuron on a fully trained network
+
+Something doesn't line up here - when I look at the distribution of fitness changes for a single 
+mutation, they are almost entirely negative. But when I look at the average fitness graph,
+it just goes straight up. Even best fitness just goes straight up, when only working with
+a generation size of 16. So 1/16 mutations must increase fitness
+
+I thought maybe I wasn't loading the elite, but this isn't the case...
+Double check config? Make sure I'm mutating the right way still?
+I did change the mutate code, but shouldnt have changed anything, just made it a method
+
+We can try training full runs at various LR, and then check how the fitness changes for various lr
+at set fitness levels for each one (see if loss landscape looks significantly different
+for each LR)
+
+Not sure what I was doing wrong yesterday, but when I fixed everything so that it worked with 
+MP, now we are getting enough improvements to supply the monotonic improvement (when we use a low enough
+learning rate)
+
+Idea I had when waking up: we can just try the beginnign of a LOT of runs, to see how much
+the seed affects things (dont have to run all the way to 50k when using the same parameters)
+
+
+FIRST POST:
+Genetic algorithms on MNIST 
+Exploring genetic algorithms to evolve function approximators.
+
+First, we show results for training on MNIST with SGD as a sort of baseline. Inspiration from this post
+for training fast, but we have used SGD to keep it simple. Still converges to 99% very vast.
+
+
+Now, let's see how genetic algorithms do. We begin by asexually evolving a population of 64 individuals, 
+where the fitness is the cross entropy loss on the full MNIST training data. However to even begin, 
+we need to figure out how we are going to mutate the parameters of the MLP. 
+
+
+
+TODOs:
+0. Add validation acc to tensorboard
+1. Optimal generation size - loss improvement analysis
+2. Making it work with smaller batch size
+
+
+One thing we need to do right away: add an initial phase to learning where we tune the lr 
+without actually mutating the network. How do we do this? 
+-- lr_only generations param to the network where for the first lr_only generations, we only
+   mutate the learning rate.
+
+
+What do we actually want to do?
+Initialize neural network randomly a bunch of times,
+evalutae each random initialization,
+mutate with a given learning rate multiplied or divided by some scaling factor,
+evaluate the new mutation improvement,
+set new base lr to be the one with the best improvement
+
+
+The problem is none of this actually solves the problem that the way I am mutating the learning rate right now
+does not give me the optimal learning rate for evolution.
+
+If I just increase the population size, then the current mutation scheme will give me close to the optimal learning rate.
+./co
+
+With small pop, elites important since sometimes fitness does not improve at all
+With large pop, can remove elites entirely
+
+What if we keep the small pop but we slow down mutation rate for sigma?
+Then a larger sigma has more chance to find a good mutation before being outcompeted by more consistent
+smaller sigmas...
+
+
+TODO: fix loss computation (divide by num examples not num batches) after we've matched performance
+
+lambda89 IS importnat! need to investigate...
+Probably what is going on here is that my initial sigma mutation only only works well when the starting sigma is smaller
+than the optimal sigma. May need to actually test this hypothesis
+
+When staring with sigma 0.5 and exponential, and 500 sigma only generations, performance is not optimal. 
+Probably sigma is still too high here.
+
+
+
+TODO
+There is something I don't understand about the variance of training runs or some setting that is causing things to 
+perform much differently than expected. Are the best runs just chance? 
+
+TODO 
+perhaps exponential does worse simply because there is a higher variance in the magnitude of the update - 
+try normalizing before updating. 
+Some quick spamming in the interpreter says this is unlikely. The param size is (28*28)*128 for l1 and (128*10) for l2 anyway
+
+Try visualizing the distribution of the updates actually taken by GA... this seems insane it's not going to look anything
+except normal
+
+Try visualizing the improvement distribution for different types of updates (normal vs exponential), see if any information 
+can be gleaned from that
+
+Another thing I haven't looked at is if the true gradient with respect to the entire training distribution matches the
+form of the smaller batches
+
+Unknowns:
+1. how much variance is there really in a single run with good starting parameters?
+2. What are the best sigma mutation parameters
+3. If we initialized sigma1 and sigma2 differently could we get better performance?
+4. We need to establish 1 before determining if exponential truly is worse than normal
+
+What we have neglecting is that we need more than just "one trial fast". We need "enough trials
+to ignore natural variance" fast. 
+
+Catch 22 - we want to run a bunch of trials to see what the variance is, 
+but we want to run these with the best parameters
+but we can't figure out the best parameters when there's so much variance
+
+Looking at the best performing trials, they don't seem to be the ones with the best initializations
+There is so much randomness involved 
+
+I have discovered that my initial sigma mutations does not result in the optimal starting sigma. Now, there are a few levers we could try to fix this:
+1. after doing initial mutations, just divide sigma by 10 to get to the optimal start point. Would have to tune this hyperparameter though.
+2. Update sigma mutation param, possibly changing up vs down. If we make it easier to mutate upward, what happens. We will come to equilibrium at a lower
+spot. Could this be enough to fix? Would have to compare rest of the training too. And would probably make the increasing sigma thing be like 10x higher
+3. Completely change the pretraining phase.
+
+1. Graph the average angle of a minibatch gradient with the full training dataset gradient
+2. Graph the average angle of a population sample step with the minibatch gradient
+Presumably, both will be normal, and hopefully we can do some theory to determine average angle of GA
+with the train gradient
+
+Alternative option: experimentally determine the average angle of a best 256 from minibatch with 
+training gradien
+
+Consider two random normal vectors a and b. We want to determine the distribution of their cosine
+similarity. Without loss of generality we let a lie along the x1 axis.
+a = (a1, 0, 0, ..., 0)
+b = (b1, b2, ..., bn)
+
+Then their cosine similarity is 
+(b1 * a1) / (||b|| * ||a||)
+ =
+ (b1 / ||b||) * (a1 / ||a||) = (b1 / ||b||) = (b1 / sqrt(sum(bi^2)))
+Now, when the dimension n is large, sum(bi^2) can be approximated as 
+var(N) * N = N
+so this becomes
+b1 / sqrt(N)
+b1 is normally distributed with mean 0 and std 1, so what happens when we multiply it by 1/(sqrt(N))? 
+The standard deviation is simply multiplied by 1/(sqrt(N)).
+-> This matches experiments
+
+Now what though?
+If we assume the training gradient lies along x1 (without loss of generality), we assume the minibatch
+gradient has a similarity sim with the training gradient, then we can further assume without loss of generality
+that the minibatch gradient is any vector that has such a similarity (since they are all radially symmetric again
+with respect to the training batch gradient). However, then for the population sample, with similarity s2
+to the minibatch gradient, symmetry is broken and we need to look at the full distribution...
+over all 
+
+
+ALRIGHT what is the full experiment:
+1. compute training data full gradient
+2. compute a minibatch gradient
+3. sample 256 vectors, take the one with best cosine similarity to minibatch gradient
+4. measure its cosine similarity to the full gradient
+
+And then I guess we want to compare this to just taking 256 vectors and getting the one with highest cosine
+similarity to the training gradient
+
+OK, we can see empirically that a small minibatch results in the best256 update often being worse wrt the training
+distribution (about 1/4 of the time). How can we improve this? Let's try just combining the two best into one and 
+see if that cancels out some of the noise:
+Result: It does not, the distribution looks very similar.
+
+Besides increasing minibatch size, not really sure what we can do here.
+I suppose we can also increase the population size so the randomly drawn vector is closer to the minibatch direction
+(which should work, since gradient descent works). I doubt this will work nearly well enough though since
+we never really sample things directly along the gradient 
+
+
+
 

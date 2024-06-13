@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
 import functools
+import os
 import datetime
 import time
 import pickle
 from threading import Thread
-from codes import BasicDNA
-from evaluations import EvaluationMethod
+from evolution.src.codes import BasicDNA
+from evolution.src.evaluations import EvaluationMethod
 import multiprocessing as mp
 import queue
 import pika
@@ -28,7 +29,7 @@ class DistributedMethod(ABC):
 
 
 def worker(dna, val=False, metadata=None):
-  #print("In worker: ", flush=True)
+  #print(f"Worker {os.getpid()}", flush=True)
   eval_result, policy_network = worker.eval_method.eval(dna, cached_policy=worker.cached_policy, val=val)
   #print("worker done eval: ", flush=True)
   worker.cached_policy = policy_network

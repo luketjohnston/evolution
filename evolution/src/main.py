@@ -14,13 +14,13 @@ import datetime
 import os
 from torch.utils.tensorboard import SummaryWriter
 import pickle
-from population import EliteAsexual
-from distributed import LocalSynchronous, LocalMultithreaded, DistributedRabbitMQ
-from policies import LinearPolicy, ConvPolicy
-from codes import BasicDNA
+from evolution.src.population import EliteAsexual
+from evolution.src.distributed import LocalSynchronous, LocalMultithreaded, DistributedRabbitMQ
+from evolution.src.policies import LinearPolicy, ConvPolicy
+from evolution.src.codes import BasicDNA
 import sys
-from common import RandomSeedGenerator
-from config import make_configs
+from evolution.src.common import RandomSeedGenerator
+from evolution.src.config import make_configs
 import time
 
 import multiprocessing as mp
@@ -170,7 +170,7 @@ if __name__ == '__main__':
                          if generation % config['checkpoint_every'] == 0:
 
                              #should be the best performing individual from the generation we just evaled
-                             pickle.dump((population.parent_generation[0].dna,config), open(f'saves/{experiment_name}/{config["save_prefix"]}_{population.parent_generation[0].fitness}_gen{generation}.pkl', 'wb'))
+                             pickle.dump((population.parent_generation[0].dna,config), open(f'saves/{experiment_name}/{config["save_prefix"]}_{population.parent_generation[0].fitness[0]}_gen{generation}.pkl', 'wb'))
                              pickle.dump((best_dna,config), open(f'saves/{experiment_name}/{config["save_prefix"]}_{best_fitness[0]}.pkl', 'wb'))
 
                      # most of the time, next_generation will be an empty list.

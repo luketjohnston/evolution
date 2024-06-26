@@ -113,7 +113,7 @@ class MNIST(EvaluationMethod):
             self.num_train_datapoints = self.x.shape[0]
 
         self.train_batch_size =  min(min(batch_size, self.x.shape[0]), self.num_train_datapoints)
-        self.val_batch_size =  min(min(batch_size, self.val_x.shape[0]), self.num_train_datapoints)
+        self.val_batch_size =  min(batch_size, self.val_x.shape[0])
 
         self.train_batch_i = 0
         self.val_batch_i = 0
@@ -157,7 +157,7 @@ class MNIST(EvaluationMethod):
                 #print("setting train_batch_i = 0")
                 self.train_batch_i = 0
                 if self.num_train_datapoints < self.x.shape[0]:
-                    print('shuffling')
+                    #print('shuffling')
                     indices = torch.randperm(self.x.shape[0])
                     self.x=self.x[indices]
                     self.y=self.y[indices]
@@ -182,6 +182,7 @@ class MNIST(EvaluationMethod):
     def eval_helper(self, policy_network, val=False):
         loss = 0
         total_intrinsic_fitness = 0
+        correct = 0
 
         #print("batch size:", batch_size)
 
@@ -200,7 +201,7 @@ class MNIST(EvaluationMethod):
               r,intrinsic_fitness=r
               total_intrinsic_fitness += intrinsic_fitness
 
-            correct = torch.sum(torch.argmax(r,dim=1) == y)
+            correct += torch.sum(torch.argmax(r,dim=1) == y)
 
             if self.loss_type == 'cross_entropy':
                 loss += torch.nn.functional.cross_entropy(r, y, reduction='sum')
@@ -232,9 +233,11 @@ class MNIST(EvaluationMethod):
     def eval(self, dna, val=False, cached_policy=None):
         #print("In eval", flush=True)
 
-        if cached_policy:
+        if cached_policy and not (dna is None):
             #print("Updating cached policy:", flush=True)
             policy_network = cached_policy.update_dna(dna)
+        elif cached_policy and (dna is None):
+            policy_network = cached_policy
         else:
             #print("Remaking policy", flush=True)
             policy_network = self.policy_factory(dna, **self.policy_args)

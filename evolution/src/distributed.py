@@ -28,7 +28,7 @@ class DistributedMethod(ABC):
         pass
 
 
-def worker(dna, val=False, metadata=None):
+def worker(dna, val=False, metadata=None, ret_policy=False):
   #print(f"Worker {os.getpid()}", flush=True)
   eval_result, policy_network = worker.eval_method.eval(dna, cached_policy=worker.cached_policy, val=val)
   #print("worker done eval: ", flush=True)
@@ -40,7 +40,10 @@ def worker(dna, val=False, metadata=None):
           eval_result[k] = v
   #print("Worker putting on queue")
 
-  worker.queue.put(eval_result)
+  if ret_policy:
+      worker.queue.put((eval_result,policy_network.clone().cpu())) 
+  else:
+      worker.queue.put((eval_result,None))
   #print("Worker done!")
 
 def worker_initializer(queue, eval_fac, eval_args):
@@ -54,8 +57,8 @@ class LocalSynchronous(DistributedMethod):
         self.queue = queue.Queue()
         worker_initializer(self.queue, eval_fac, eval_args)
 
-    def add_task(self, dna, val=False):
-        worker(dna, val=val)
+    def add_task(self, dna, val=False, ret_policy=False):
+        worker(dna, val=val, ret_policy=ret_policy)
 
     def get_task_results(self):
         while True:
@@ -78,10 +81,10 @@ class LocalMultithreaded(DistributedMethod):
         self.queue = mp.Queue()
         self.pool = mp.Pool(pool_size, initializer=worker_initializer, initargs=(self.queue, eval_fac, eval_args))
 
-    def add_task(self, dna, val=False, metadata=None):
+    def add_task(self, dna, val=False, metadata=None, ret_policy=False):
 
         #print("Applying async", flush=True)
-        self.pool.apply_async(worker, (dna, val, metadata))
+        self.pool.apply_async(worker, (dna, val, metadata, ret_policy))
         #print("Done applying async", flush=True)
 
     def get_task_results(self):
@@ -101,6 +104,7 @@ DistributedMethod.register(LocalMultithreaded)
 
 # TODO update with eval_fac and eval_args, like localMultithreaded above etc
 # TODO update with val
+# TODO update with ret_policy
 class DistributedRabbitMQ(DistributedMethod):
     def __init__(self, eval_method: EvaluationMethod, is_master=True):
         # don't do anything with the evaluation method - will have to setup workers elsewhere

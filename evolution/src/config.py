@@ -1,9 +1,9 @@
 from evolution.src.policies import ConvPolicy, LinearPolicy, MultiConv, MemorizationModule, MemorizationModuleWithLR, MemorizationModuleWithLRFull, MemModuleBasic
 from itertools import product
 import torch
-from evolution.src.codes import BasicDNA
+from evolution.src.codes import BasicDNA, OrderedDNA, AsexualSexualDummyDNA, OrderedMultiDNA
 import random
-from evolution.src.population import Sexual, EliteAsexual
+from evolution.src.population import Sexual, EliteAsexual, AveragePop
 from evolution.src.evaluations import MemorizationDataset, NTimes, MNIST
 from evolution.src.common import RandomSeedGenerator
 from evolution.src.distributed import LocalMultithreaded, LocalSynchronous, DistributedRabbitMQ
@@ -17,14 +17,19 @@ distributed_args =   {
 #distributed_class = LocalSynchronous
 #distributed_args = {}
 
-experiment_name = 'june11'
+#experiment_name = 'sex_june17_c64_d500_bdna_3'
+#experiment_name = 'ave_june18_c64_d500_1'
+#experiment_name = 'asex_b500_vary_parent_experiment1'
+experiment_name = 'avpop_b500_scale8_fixed1'
 
 configs = []
 
-eval_every=200
+eval_every = 200
+checkpoint_every = 1000
 
 
-popsizes = [(256,1)]
+popsizes = [(256,64)]
+#popsizes = [(256,1)]
 
 #input_dims=[64,64,3]
 #input_dims=[128]
@@ -49,12 +54,22 @@ else:
 
 print(f"Using device {device}")
 
+#(dna_factory, dna_name) = (BasicDNA, 'basicdna')
+(dna_factory, dna_name) = (OrderedMultiDNA, 'ordmultdna')
+#(dna_factory, dna_name) = (OrderedDNA, 'orddna')
+#(dna_factory, dna_name) = (AsexualSexualDummyDNA, 'dummydna')
+
 
 #factory,name = (ConvPolicy, 'conv')
 factory,name = (LinearPolicy, 'mlp')
+#population_factory, population_name = (EliteAsexual, 'asex')
+#population_factory, population_name = (Sexual, 'sex')
+population_factory, population_name = (AveragePop, 'ave')
+
+
 eval_factory,eval_name=(MNIST,'mnist')
 input_dims=[28,28,1] # mnist
-trials = 100
+trials = 4
 kernel_dims = [3,3]
 channels = [1,32,64]
 strides = [1,1,1]
@@ -63,12 +78,13 @@ num_classes = 10
 target_fitness = -1e-3 # stop when this is reached
 
 #num_train_datapoints_l = [512,2048,'all']
-num_train_datapoints_l = ['all']
+num_train_datapoints_l = [500]
+#num_train_datapoints_l = [500, 'all']
 mutations = ['normal']
 #mutations = ['one']
 #sigma_mutations = [1.1] # 1 means no mutation
 #sigma_mutations = [1.05] # 1 means no mutation
-sigma_mutations = [1.05] # 1 means no mutation
+sigma_mutations = [1.] # 1 means no mutation
 
 batch_sizes=[10000]
 
@@ -82,11 +98,15 @@ batch_sizes=[10000]
 
 #sigma_l = [(7e-3,6e-3), (2e-3,1e-3), (1e-3,4e-5)] # Can start both exponential and normal at 0.02
 # Can start both exponential and normal at 0.02
-sigma_l = [(0.0001,0.0001)] 
+#sigma_l = [(0.0001,0.0001)] 
+sigma_l = [(2e-3,1e-3)] 
+#sigma_l = [(20,20)] 
+#sigma_l = [(2e-2,1e-2)] 
+#sigma_l = [(2e-4,1e-4)] 
 
 sigma_only_generations_l = [-1]
 #sigma_only_generations_l = [1]
-max_generation=200000
+max_generation=15000
 
 #sigma_only_generations = 0
 #trials=1
@@ -153,21 +173,13 @@ def make_configs():
 
           }
 
-      # TODO automate other parts of save-prefix (asexual, etc)
-      save_prefix = f'{eval_name}-{loss_type}-asex-{name}-p{parent_population_size}-c{child_population_size}-e{num_elites}-ds{num_train_datapoints}-t{trial}-pis{pop_init_seed}-s1{sigma[0]}-s2{sigma[1]}'
-      for k,v in policy_args.items():
-          if k in ['kernel_dims', 'strides','channels','act_dim','hidden_size','input_dim', 'device', 'sigma']:
-              continue
-          save_prefix += f'-{k}{v}'
 
       config = {
-        'num_elites':  num_elites,
         'parent_population_size': parent_population_size,
         'child_population_size': child_population_size,
-        'save_prefix': save_prefix,
         'max_generation': max_generation,
         'distributed_class': distributed_class,
-        'checkpoint_every': 1000,
+        'checkpoint_every': checkpoint_every,
         'target_fitness': target_fitness,
         'eval_every': eval_every,
         'pop_init_seed': pop_init_seed,
@@ -189,16 +201,25 @@ def make_configs():
 
       config['eval_fac'] = eval_factory
 
-      config['population_factory'] = EliteAsexual
+      config['population_factory'] = population_factory
       config['population_kwargs'] = {
-                  'dna_class': BasicDNA, 
+                  'dna_class': dna_factory, 
                   'parent_population_size': config['parent_population_size'], 
                   'child_population_size': config['child_population_size'],
                   'random_seed_generator': RandomSeedGenerator(pop_init_seed), # TODO move this object so we can pickle the entire config
-                  'num_elites': config['num_elites'],
+                  #'num_elites': num_elites,
                   }
+      if population_name == 'asex':
+          config['population_kwargs']['num_elites'] = num_elites
 
+      # TODO automate other parts of save-prefix (asexual, etc)
+      save_prefix = f'{eval_name}-{loss_type}-{population_name}-{name}-p{parent_population_size}-c{child_population_size}-e{num_elites}-ds{num_train_datapoints}-t{trial}-dna{dna_name}-pis{pop_init_seed}-s1{sigma[0]}-s2{sigma[1]}'
+      for k,v in policy_args.items():
+          if k in ['kernel_dims', 'strides','channels','act_dim','hidden_size','input_dim', 'device', 'sigma']:
+              continue
+          save_prefix += f'-{k}{v}'
 
+      config['save_prefix'] = save_prefix
               
       configs.append(config)
     return (experiment_name, configs)

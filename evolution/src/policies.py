@@ -29,6 +29,193 @@ class PolicyNetwork(ABC):
     def act(self, state):
         pass
 
+class LinearPolicy(torch.nn.Module):
+    ''' 
+    Simple linear policy, one hidden state with relu activation, maps input dimension to 
+    action dimension.
+    '''
+    def __init__(self, dna, input_dim, hidden_dim, act_dim, initialization_seed, sigma, trainable=False, mutation='one', device='cpu', sigma_mutation=1.3, sigma_only_generations=-1):
+        super().__init__()
+        self.start_sigma = sigma
+        self.sigma_mutation = sigma_mutation
+        self.device = device
+        self.generator = torch.Generator(device=device)
+        self.initialization_seed = initialization_seed
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.act_dim = act_dim
+        self.sigma_only_generations = sigma_only_generations
+        self.metadata={'policy_make_time' : 0}
+        assert mutation in ['one','exponential','normal', 'uniform']
+        self.mutation=mutation
+        self.trainable=trainable
+        self.initialization_helper()
+        self.update_dna(dna)
+
+    # Just clones so we can save the policy
+
+    def clone(self):
+        f = LinearPolicy(
+            dna=type(self.dna)([]),
+            input_dim=self.input_dim,
+            hidden_dim=self.hidden_dim,
+            act_dim=self.act_dim,
+            initialization_seed=self.initialization_seed,
+            sigma=self.start_sigma, 
+            trainable=self.trainable,
+            mutation=self.mutation,
+            device=self.device,
+            sigma_mutation=self.sigma_mutation,
+            sigma_only_generations=self.sigma_only_generations)
+
+        f.sigma1=self.sigma1
+        f.sigma2=self.sigma2
+        f.l1 = torch.nn.Parameter(torch.clone(self.l1))
+        f.l2 = torch.nn.Parameter(torch.clone(self.l2))
+        f.dna = self.dna.copy()
+        f.generator=None # can't pickle generators apparently?
+        return f
+
+
+
+    def initialization_helper(self):
+        self.generator.manual_seed(self.initialization_seed)
+        self.sigma1 = self.start_sigma[0]
+        self.sigma2 = self.start_sigma[1]
+        std = 2 / math.sqrt(self.hidden_dim)
+        self.l1 = torch.nn.Parameter(torch.normal(mean=0, std=std, size=(self.input_dim, self.hidden_dim), generator=self.generator, device=self.device), requires_grad=self.trainable)
+        std = 2 / math.sqrt(self.act_dim)
+        self.l2 = torch.nn.Parameter(torch.normal(mean=0, std=std, size=(self.hidden_dim, self.act_dim), generator=self.generator, device=self.device), requires_grad=self.trainable)
+        self.dna = BasicDNA([]) # don't set to dna arg yet, will do that with call to self.update_dna(dna) below
+
+    def mutate(self, seed, sign, sigma_only=False, weight=1.0):
+        self.generator.manual_seed(seed)
+        sigma1_update = (torch.randint(3, size=(1,), generator=self.generator, device=self.device) - 1).item()
+        sigma2_update = (torch.randint(3, size=(1,), generator=self.generator, device=self.device) - 1).item()
+        # if we are mutating sigma, we can't use a weight arg
+        if abs(self.sigma_mutation - 1.0) > 1e-7:
+            assert abs(weight - 1.0) < 1e-7
+
+        if sign == 1: 
+            self.sigma1 *= self.sigma_mutation**(sign * sigma1_update)
+            self.sigma2 *= self.sigma_mutation**(sign * sigma2_update)
+
+            
+        if self.mutation == 'normal' and not sigma_only:
+            #std = 2 / math.sqrt(self.hidden_dim)
+            self.l1 += sign * self.sigma1 * torch.normal(mean=0, std=1, size=self.l1.shape, generator=self.generator,device=self.device) * weight
+            #std = 2 / math.sqrt(self.act_dim)
+            self.l2 += sign * self.sigma2 * torch.normal(mean=0, std=1, size=self.l2.shape, generator=self.generator, device=self.device) * weight
+        elif self.mutation == 'exponential' and not sigma_only:
+                lambda1 = 1
+                randsign = torch.randint(2, size=self.l1.shape, generator=self.generator, device=self.device) * 2 - 1
+                self.l1 += self.sigma1 * sign * randsign * torch.zeros(self.l1.shape, device=self.device).exponential_(lambda1, generator=self.generator) * weight
+                lambda2 = 1
+                randsign = torch.randint(2, size=self.l2.shape, generator=self.generator, device=self.device) * 2 - 1
+                self.l2 += self.sigma2 * sign * randsign * torch.zeros(self.l2.shape, device=self.device).exponential_(lambda2, generator=self.generator) * weight
+        elif self.mutation == 'one' and not sigma_only: 
+            randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
+            if randsign > 0:
+                randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
+                self.l1[torch.randint(self.l1.shape[0], size=(1,), generator=self.generator, device=self.device)] += self.sigma1 * sign  * randsign * weight
+            else:
+                randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
+                self.l2[torch.randint(self.l2.shape[0], size=(1,), generator=self.generator, device=self.device)] += self.sigma2 * sign * randsign * weight
+        elif self.mutation == 'uniform' and not sigma_only:
+                self.l1 += self.sigma1 * sign * (torch.rand(self.l1.shape, device=self.device, generator=self.generator) * 2 - 1) * weight
+                self.l2 += self.sigma2 * sign * (torch.rand(self.l2.shape, device=self.device, generator=self.generator) * 2 - 1) * weight
+
+        if sign == -1:
+            self.sigma1 *= self.sigma_mutation**(sign * sigma1_update)
+            self.sigma2 *= self.sigma_mutation**(sign * sigma2_update)
+
+    # Invariant:
+    # Full mutation is applied for all the seed indexed i==self.sigma_only_generations 
+    # Full mutation is always applied for the last seed
+    def update_dna(self, new_dna):
+        t1 = time.time()
+        #print(f"In update dna with new_dna: {new_dna}, new_dna.seeds: {new_dna.seeds}")
+
+    
+        if abs(self.sigma_mutation - 1.0) > 1e-5:
+            i = 0
+            while (i < min(len(new_dna.seeds), len(self.dna.seeds))) and  new_dna.seeds[i] == self.dna.seeds[i]:
+                i += 1
+
+            # If we are still mutating only the sigmas, we need to make sure to rollback the last self.dna.seed
+            if (i == len(self.dna.seeds)) and i <= self.sigma_only_generations and i > 0: 
+                i -= 1
+
+            # TODO need to verify this all actually works once I start running with more parents again 
+            # rollback unused mutations
+            current_i = len(self.dna.seeds)
+            for s in reversed(self.dna.seeds[i:]):
+                current_i -= 1
+                sigma_only = current_i < len(self.dna.seeds)-1 and current_i < self.sigma_only_generations
+                #print(f"ROLLING BACK self.dna: {self.dna.seeds}, new_dna: {new_dna.seeds}, seed: {s}, sigma_only: {sigma_only}", flush=True)
+                self.mutate(s, -1, sigma_only=sigma_only)
+
+            # add new mutations
+            current_i = i
+            for s in new_dna.seeds[i:]:
+                sigma_only = current_i < len(new_dna.seeds)-1 and current_i < self.sigma_only_generations
+                current_i += 1
+                #print(f"MUTATING self.dna: {self.dna.seeds}, new_dna: {new_dna.seeds}, seed: {s}, sigma_only: {sigma_only}", flush=True)
+                self.mutate(s, 1, sigma_only=sigma_only)
+            #print(f"Positive mutations: {positive_mutations}, negative_mutations: {negative_mutations}")
+        else:
+
+            current_seeds = set(self.dna.seeds)
+            new_seeds = set(new_dna.seeds)
+
+            for s in set(new_dna.seeds + self.dna.seeds):
+                if s in current_seeds and s in new_seeds:
+                    continue # do nothing, this mutation is cached
+                elif s in current_seeds and not s in new_seeds:
+                    sign = -1
+                elif s not in current_seeds and s in new_seeds:
+                    sign = 1
+
+                if type(s) is tuple:
+                    if len(s) > 1:
+                        for si in s:
+                            #print('si: ', si)
+                            self.mutate(si, sign, sigma_only=False, weight=1.0/len(s) * 8) # Emprically 8 seems correct for 64 parents
+                            # for 64 parents.
+                            # The idea is that the average of a bunch of random vectors will have a much lower magnitude than a single vector, so we need to scale up the learning
+                            # rate accordingly.
+                    else:
+                        self.mutate(s[0], sign, sigma_only=False, weight=1.0) 
+
+                else:
+                    self.mutate(s, sign, sigma_only=False)
+
+
+
+        self.dna = new_dna.copy()
+        self.metadata['policy_make_time'] = time.time() - t1
+        self.metadata['sigma1'] = self.sigma1
+        self.metadata['sigma2'] = self.sigma2
+        return self
+
+    def act(self, state):
+        state = torch.tensor(state).float()
+        state = state.view([state.shape[0], -1]) # flatten 
+        hidden = torch.nn.functional.relu(torch.matmul(state,  self.l1))
+        probs = torch.nn.functional.softmax(torch.matmul(hidden, self.l2), dim=0)
+        action = torch.multinomial(probs, 1)
+        return action.item()
+    def __call__(self, state):
+        state = torch.tensor(state).float()
+        state = state.view([state.shape[0], -1]) # flatten 
+        hidden = torch.nn.functional.relu(torch.matmul(state,  self.l1))
+        logits = torch.matmul(hidden, self.l2)
+        if not self.trainable:
+            return logits,0
+        else:
+            return logits
+
+PolicyNetwork.register(LinearPolicy)
 
 class MemorizationModule(torch.nn.Module):
     def __init__(self, dna, input_dim, act_dim, heads, initialization_seed=0, sigma=0.002,proj_dim=None,add_memory_prob=0.4,remove_memory_prob=0.3):
@@ -128,7 +315,7 @@ class MemorizationModule(torch.nn.Module):
         #        self.memories[memory_i] = torch.nn.functional.normalize(self.memories[memory_i],dim=0)
         #    self.logits[memory_i] += sign * self.sigma * torch.normal(mean=0,std=1,size=self.logits.shape[1:],generator=self.generator)
 
-        self.dna = new_dna
+        self.dna = new_dna.copy()
         self.metadata['policy_make_time'] = time.time() - t1
         return self
         
@@ -157,148 +344,6 @@ class MemorizationModule(torch.nn.Module):
         else:
             return action
 
-class LinearPolicy(torch.nn.Module):
-    ''' 
-    Simple linear policy, one hidden state with relu activation, maps input dimension to 
-    action dimension.
-    '''
-    def __init__(self, dna, input_dim, hidden_dim, act_dim, initialization_seed, sigma, trainable=False, mutation='one', device='cpu', sigma_mutation=1.3, sigma_only_generations=-1):
-        super().__init__()
-        self.start_sigma = sigma
-        self.sigma_mutation = sigma_mutation
-        self.device = device
-        self.generator = torch.Generator(device=device)
-        self.initialization_seed = initialization_seed
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.act_dim = act_dim
-        self.sigma_only_generations = sigma_only_generations
-        self.metadata={'policy_make_time' : 0}
-        assert mutation in ['one','exponential','normal', 'uniform']
-        self.mutation=mutation
-        self.trainable=trainable
-        self.initialization_helper()
-        self.update_dna(dna)
-
-
-
-    def initialization_helper(self):
-        self.generator.manual_seed(self.initialization_seed)
-        self.sigma1 = self.start_sigma[0]
-        self.sigma2 = self.start_sigma[1]
-        std = 2 / math.sqrt(self.hidden_dim)
-        self.l1 = torch.nn.Parameter(torch.normal(mean=0, std=std, size=(self.input_dim, self.hidden_dim), generator=self.generator, device=self.device), requires_grad=self.trainable)
-        std = 2 / math.sqrt(self.act_dim)
-        self.l2 = torch.nn.Parameter(torch.normal(mean=0, std=std, size=(self.hidden_dim, self.act_dim), generator=self.generator, device=self.device), requires_grad=self.trainable)
-        self.dna = BasicDNA([]) # don't set to dna arg yet, will do that with call to self.update_dna(dna) below
-
-    def mutate(self, seed, sign, sigma_only=False):
-        self.generator.manual_seed(seed)
-        sigma1_update = (torch.randint(3, size=(1,), generator=self.generator, device=self.device) - 1).item()
-        sigma2_update = (torch.randint(3, size=(1,), generator=self.generator, device=self.device) - 1).item()
-
-        if sign == 1: 
-            self.sigma1 *= self.sigma_mutation**(sign * sigma1_update)
-            self.sigma2 *= self.sigma_mutation**(sign * sigma2_update)
-
-            
-        if self.mutation == 'normal' and not sigma_only:
-            std = 2 / math.sqrt(self.hidden_dim)
-            self.l1 += sign * self.sigma1 * torch.normal(mean=0, std=1, size=self.l1.shape, generator=self.generator,device=self.device)
-            std = 2 / math.sqrt(self.act_dim)
-            self.l2 += sign * self.sigma2 * torch.normal(mean=0, std=1, size=self.l2.shape, generator=self.generator, device=self.device)
-        elif self.mutation == 'exponential' and not sigma_only:
-                lambda1 = 1
-                randsign = torch.randint(2, size=self.l1.shape, generator=self.generator, device=self.device) * 2 - 1
-                self.l1 += self.sigma1 * sign * randsign * torch.zeros(self.l1.shape, device=self.device).exponential_(lambda1, generator=self.generator)
-                lambda2 = 1
-                randsign = torch.randint(2, size=self.l2.shape, generator=self.generator, device=self.device) * 2 - 1
-                self.l2 += self.sigma2 * sign * randsign * torch.zeros(self.l2.shape, device=self.device).exponential_(lambda2, generator=self.generator)
-        elif self.mutation == 'one' and not sigma_only: 
-            randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
-            if randsign > 0:
-                randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
-                self.l1[torch.randint(self.l1.shape[0], size=(1,), generator=self.generator, device=self.device)] += self.sigma1 * sign  * randsign
-            else:
-                randsign = (torch.randint(2, size=(1,), generator=self.generator, device=self.device) * 2 - 1)
-                self.l2[torch.randint(self.l2.shape[0], size=(1,), generator=self.generator, device=self.device)] += self.sigma2 * sign * randsign
-        elif self.mutation == 'uniform' and not sigma_only:
-                self.l1 += self.sigma1 * sign * (torch.rand(self.l1.shape, device=self.device, generator=self.generator) * 2 - 1)
-                self.l2 += self.sigma2 * sign * (torch.rand(self.l2.shape, device=self.device, generator=self.generator) * 2 - 1)
-
-        if sign == -1:
-            self.sigma1 *= self.sigma_mutation**(sign * sigma1_update)
-            self.sigma2 *= self.sigma_mutation**(sign * sigma2_update)
-
-    # Invariant:
-    # Full mutation is applied for all the seed indexed i==self.sigma_only_generations 
-    # Full mutation is always applied for the last seed
-    def update_dna(self, new_dna):
-        t1 = time.time()
-
-        i = 0
-        while (i < min(len(new_dna.seeds), len(self.dna.seeds))) and  new_dna.seeds[i] == self.dna.seeds[i]:
-            i += 1
-
-        # If we are still mutating only the sigmas, we need to make sure to rollback the last self.dna.seed
-        if (i == len(self.dna.seeds)) and i <= self.sigma_only_generations and i > 0: 
-            i -= 1
-
-        # TODO need to verify this all actually works once I start running with more parents again 
-        # rollback unused mutations
-        current_i = len(self.dna.seeds)
-        for s in reversed(self.dna.seeds[i:]):
-            current_i -= 1
-            sigma_only = current_i < len(self.dna.seeds)-1 and current_i < self.sigma_only_generations
-            #print(f"ROLLING BACK self.dna: {self.dna.seeds}, new_dna: {new_dna.seeds}, seed: {s}, sigma_only: {sigma_only}", flush=True)
-            self.mutate(s, -1, sigma_only=sigma_only)
-
-        # add new mutations
-        current_i = i
-        for s in new_dna.seeds[i:]:
-            sigma_only = current_i < len(new_dna.seeds)-1 and current_i < self.sigma_only_generations
-            current_i += 1
-            #print(f"MUTATING self.dna: {self.dna.seeds}, new_dna: {new_dna.seeds}, seed: {s}, sigma_only: {sigma_only}", flush=True)
-            self.mutate(s, 1, sigma_only=sigma_only)
-        #print(f"Positive mutations: {positive_mutations}, negative_mutations: {negative_mutations}")
-
-
-
-        #for s in set(new_dna.seeds + self.dna.seeds):
-        #    if s in current_seeds and s in new_seeds:
-        #        continue # do nothing, this mutation is cached
-        #    elif s in current_seeds and not s in new_seeds:
-        #        sign = -1
-        #    elif s not in current_seeds and s in new_seeds:
-        #        sign = 1
-        #        self.sigma *= 2**(sigma_update)
-
-
-
-        self.dna = new_dna
-        self.metadata['policy_make_time'] = time.time() - t1
-        self.metadata['sigma1'] = self.sigma1
-        self.metadata['sigma2'] = self.sigma2
-        return self
-
-    def act(self, state):
-        state = torch.tensor(state).float()
-        state = state.view([state.shape[0], -1]) # flatten 
-        hidden = torch.nn.functional.relu(torch.matmul(state,  self.l1))
-        probs = torch.nn.functional.softmax(torch.matmul(hidden, self.l2), dim=0)
-        action = torch.multinomial(probs, 1)
-        return action.item()
-    def __call__(self, state):
-        state = torch.tensor(state).float()
-        state = state.view([state.shape[0], -1]) # flatten 
-        hidden = torch.nn.functional.relu(torch.matmul(state,  self.l1))
-        logits = torch.matmul(hidden, self.l2)
-        if not self.trainable:
-            return logits,0
-        else:
-            return logits
-
-PolicyNetwork.register(LinearPolicy)
 
 
 class ConvPolicy(torch.nn.Module):

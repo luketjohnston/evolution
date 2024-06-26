@@ -1,0 +1,30 @@
+[project]
+name = "evolution"
+version = "0.0.1"
+authors = [
+  { name="Luke Johnston", email="luketjohnston32@gmail.com" },
+]
+description = "Some experiments with genetic algorithms"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+# TODO should this be here or use requirements3.txt?
+dependencies=[
+  "gymnasium[atari, accept-rom-license]",
+  "pika",
+  "boto3",
+  "sortedcontainers",
+  "tensorboard",
+  "torch",
+  "torchvision",
+]
+[project.urls]
+Homepage = "https://github.com/luketjohnston/evolution"
+[build-system]
+requires = [
+  "hatchling",
+  ]
+build-backend = "hatchling.build"

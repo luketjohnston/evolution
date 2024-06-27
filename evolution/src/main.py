@@ -18,7 +18,7 @@ from evolution.src.population import EliteAsexual
 from evolution.src.distributed import LocalSynchronous, LocalMultithreaded, DistributedRabbitMQ
 from evolution.src.policies import LinearPolicy, ConvPolicy
 import sys
-from evolution.src.common import RandomSeedGenerator
+from evolution.src.common import RandomSeedGenerator, Fitness
 from evolution.src.config import make_configs
 import time
 
@@ -60,7 +60,7 @@ if __name__ == '__main__':
             config['distributed_args'] = {}
 
         target_fitness = config['target_fitness']
-        best_fitness = (-99999999999999,0) # TODO make more general
+        best_fitness = Fitness(-99999999999999,0) # TODO make more general
 
 
         total_training_frames = 0
@@ -123,7 +123,7 @@ if __name__ == '__main__':
                             print("Failed to improve val loss for 10 evals, terminating...")
                             break
 
-                        if generation > config['max_generation'] or individual.fitness[0] >= target_fitness:
+                        if generation > config['max_generation'] or metadata['val_fitness'] >= target_fitness:
                             print("Reached target fitness or max generation, terminating...")
                             break
                         continue
@@ -136,12 +136,12 @@ if __name__ == '__main__':
                     # most of the time, next_generation will be an empty list.
                     next_generation = population.add_grownup(individual)
 
-                    if (individual.fitness[0] == best_fitness[0] and individual.fitness[1] > best_fitness[1]): 
-                        best_fitness = individual.fitness
+                    if (metadata['train_fitness'] == best_fitness.base and metadata['train_intrinsic_fitness'] > best_fitness.intrinsic): 
+                        best_fitness = Fitness(metadata['train_fitness'], metadata['train_intrinsic_fitness'])
                         best_metadata = metadata
 
-                    if individual.fitness[0] > best_fitness[0]: 
-                        best_fitness = individual.fitness
+                    if metadata['train_fitness'] > best_fitness.base: 
+                        best_fitness = Fitness(metadata['train_fitness'], metadata['train_intrinsic_fitness'])
                         best_metadata = metadata
                         best_dna = individual.dna
 
@@ -150,18 +150,18 @@ if __name__ == '__main__':
                         s_per_i = s_per_g / config['child_population_size']
                         generation += 1
                         # plot best fitness and average fitness
-                        ave_fitness = sum([x.fitness[0] for x in population.last_generation_all_grownups])
+                        ave_fitness = sum([x.fitness.base for x in population.last_generation_all_grownups])
                         ave_fitness /= len(population.last_generation_all_grownups)
-                        print(f"BEST {best_fitness[0]}, AVE {ave_fitness}, generation {generation} complete, {s_per_g}s/g, {s_per_i}s/i")
-                        ave_intrinsic_fitness = sum([x.fitness[1] for x in population.last_generation_all_grownups])
+                        print(f"BEST {best_fitness.base}, AVE {ave_fitness}, generation {generation} complete, {s_per_g}s/g, {s_per_i}s/i")
+                        ave_intrinsic_fitness = sum([x.fitness.base for x in population.last_generation_all_grownups])
                         ave_intrinsic_fitness /= len(population.last_generation_all_grownups)
                         ave_policy_make_time /= len(population.last_generation_all_grownups)
                         writer.add_scalar('ave_policy_make_time', ave_policy_make_time, generation)
                         ave_policy_make_time = 0
                         writer.add_scalar('ave_fitness', ave_fitness, generation)
                         writer.add_scalar('ave_intrinsic_fitness', ave_intrinsic_fitness, generation)
-                        writer.add_scalar('best_fitness', best_fitness[0], generation)
-                        writer.add_scalar('best_fitness_intrinsic', best_fitness[1] - math.floor(best_fitness[1]), generation)
+                        writer.add_scalar('best_fitness', best_fitness.base, generation)
+                        writer.add_scalar('best_fitness_intrinsic', best_fitness.intrinsic, generation)
                         writer.add_scalar('total_frames', total_frames, generation)
                         writer.add_scalar('sigma1', best_metadata['sigma1'], generation)
                         writer.add_scalar('sigma2', best_metadata['sigma2'], generation)
@@ -179,17 +179,12 @@ if __name__ == '__main__':
                            start = time.time()
                         elapsed_time = time.time() - start
                         if generation > 0:
-                            writer.add_scalar('best_fitness_time', best_fitness[0], elapsed_time)
+                            writer.add_scalar('best_fitness_time', best_fitness.base, elapsed_time)
                             writer.add_scalar('ave_fitness_time', ave_fitness, elapsed_time)
 
-                        if generation > config['max_generation'] or individual.fitness[0] >= target_fitness:
+                        if generation > config['max_generation'] or individual.fitness.base >= target_fitness:
                             task_manager.add_task(best_dna, val=True, ret_policy=True) # TODO use ret_policy
 
-                        #if generation % config['checkpoint_every'] == 0:
-
-                        #    #should be the best performing individual from the generation we just evaled
-                        #    pickle.dump((population.parent_generation[0].dna,config), open(f'saves/{experiment_name}/{config["save_prefix"]}_{population.parent_generation[0].fitness[0]}_gen{generation}.pkl', 'wb'))
-                        #    pickle.dump((best_dna,config), open(f'saves/{experiment_name}/{config["save_prefix"]}_{best_fitness[0]}.pkl', 'wb'))
 
                     # most of the time, next_generation will be an empty list.
                     # TODO: should probably add some logic to clear existing tasks if we don't need

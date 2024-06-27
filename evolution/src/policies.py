@@ -70,8 +70,8 @@ class LinearPolicy(torch.nn.Module):
 
         f.sigma1=self.sigma1
         f.sigma2=self.sigma2
-        f.l1 = torch.nn.Parameter(torch.clone(self.l1))
-        f.l2 = torch.nn.Parameter(torch.clone(self.l2))
+        f.l1 = torch.nn.Parameter(torch.clone(self.l1), requires_grad=self.trainable)
+        f.l2 = torch.nn.Parameter(torch.clone(self.l2), requires_grad=self.trainable)
         f.dna = self.dna.copy()
         f.generator=None # can't pickle generators apparently?
         return f

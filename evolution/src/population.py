@@ -1,4 +1,4 @@
-from evolution.src.common import Individual
+from evolution.src.common import Individual, Fitness
 from sortedcontainers import SortedList
 import random
 from abc import ABC, abstractmethod
@@ -32,7 +32,7 @@ class BasicPop(Population):
             ):
 
         # TODO: the initial parents should probably be evaluated, instead of assuming they all suck. The first elite will be passed on for no reason
-        self.parent_generation = SortedList([Individual(dna_class([]), (-9999,0)) for _ in range(parent_population_size)], key = lambda x: x.fitness)
+        self.parent_generation = SortedList([Individual(dna_class([]), Fitness(-9999,0,0)) for _ in range(parent_population_size)], key = lambda x: x.fitness)
         self.parent_population_size = parent_population_size
         self.child_population_size = child_population_size
         self.random_seed_generator = random_seed_generator

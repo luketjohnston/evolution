@@ -20,7 +20,7 @@ distributed_args =   {
 #experiment_name = 'sex_june17_c64_d500_bdna_3'
 #experiment_name = 'ave_june18_c64_d500_1'
 #experiment_name = 'asex_b500_vary_parent_experiment1'
-experiment_name = 'avpop_b500_scale8_fixed1'
+experiment_name = 'avpop_b500_scale8_improvement_1'
 
 configs = []
 

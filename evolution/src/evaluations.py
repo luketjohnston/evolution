@@ -1,4 +1,4 @@
-from evolution.src.common import Individual, first_nonzero_index
+from evolution.src.common import Individual, first_nonzero_index, Fitness
 import os
 import math
 import random
@@ -178,13 +178,35 @@ class MNIST(EvaluationMethod):
 
 
 
+    def eval_minibatch_helper(self, x, y, policy_network):
 
-    def eval_helper(self, policy_network, val=False):
-        loss = 0
-        total_intrinsic_fitness = 0
-        correct = 0
+        r = policy_network(x)
+        if isinstance(r,tuple):
+          r,intrinsic_fitness=r
 
-        #print("batch size:", batch_size)
+        correct = torch.sum(torch.argmax(r,dim=1) == y)
+
+        if self.loss_type == 'cross_entropy':
+            loss = torch.nn.functional.cross_entropy(r, y, reduction='sum')
+            #if loss < 5:
+            #    print(torch.sum(x))
+            #    print(y)
+            #assert x.shape[0] == 500 # this is always true
+            #print(f"loss: {loss}, x.shape: {x.shape}")
+            # compute acc
+            #loss += torch.nn.functional.cross_entropy(r, y)
+        elif self.loss_type == 'num_incorrect':
+            loss = torch.sum(torch.ne(torch.argmax(r, dim=1), y))
+        elif self.loss_type == 'num_till_death':
+            incorrect = torch.ne(torch.argmax(r, dim=1), y)
+            loss = -1 * first_nonzero_index(incorrect)
+        return loss, intrinsic_fitness, correct
+
+    def eval_helper(self, policy_network, old_policy_network = None, val=False):
+
+        loss, old_loss = 0,0
+        intrinsic_fitness, old_intrinsic_fitness = 0,0
+        correct, old_correct = 0,0
 
         total_evaled = 0
         if val:
@@ -194,75 +216,94 @@ class MNIST(EvaluationMethod):
 
         while total_evaled < max_eval:
             x,y = self.get_batch_helper(val)
-            #print(f"val {val}, batch {batch_i}, x.shape[0]: {x.shape[0]}, indices: {indices[batch_i * batch_size:batch_i*batch_size + batch_size]}", flush=True)
-            r = policy_network(x)
             total_evaled += x.shape[0]
-            if isinstance(r,tuple):
-              r,intrinsic_fitness=r
-              total_intrinsic_fitness += intrinsic_fitness
 
-            correct += torch.sum(torch.argmax(r,dim=1) == y)
+            dloss, dintrinsic_fitness, dcorrect = self.eval_minibatch_helper(x,y,policy_network)
+            loss += dloss
+            intrinsic_fitness += dintrinsic_fitness
+            correct += dcorrect
 
-            if self.loss_type == 'cross_entropy':
-                loss += torch.nn.functional.cross_entropy(r, y, reduction='sum')
-                #if loss < 5:
-                #    print(torch.sum(x))
-                #    print(y)
-                #assert x.shape[0] == 500 # this is always true
-                #print(f"loss: {loss}, x.shape: {x.shape}")
-                # compute acc
-                #loss += torch.nn.functional.cross_entropy(r, y)
-            elif self.loss_type == 'num_incorrect':
-                loss += torch.sum(torch.ne(torch.argmax(r, dim=1), y))
-            elif self.loss_type == 'num_till_death':
-                incorrect = torch.ne(torch.argmax(r, dim=1), y)
-                loss += -1 * first_nonzero_index(incorrect)
-                if torch.any(incorrect):
-                  break
+            if old_policy_network:
+                old_dloss, old_dintrinsic_fitness, old_dcorrect = self.eval_minibatch_helper(x,y,old_policy_network)
+                old_loss += old_dloss
+                old_intrinsic_fitness += old_dintrinsic_fitness
+                old_correct += old_dcorrect
+
+
+            if self.loss_type == 'num_till_death' and (dcorrect < x.shape[0]):
+                break
 
         if self.loss_type == 'num_till_death':
-            loss += i + 1
+            assert False, "TODO update this"
+            #loss += i + 1
         else:
-            # NOTE that if batch_size does not divide N, this calculation will not be an exact mean
             loss /= total_evaled
-            total_intrinsic_fitness /= total_evaled
+            intrinsic_fitness /= total_evaled
             acc = correct / total_evaled
-        return loss, total_intrinsic_fitness, acc
+
+            old_loss /= total_evaled
+            old_intrinsic_fitness /= total_evaled
+            old_acc = old_correct / total_evaled
+
+        if old_policy_network:
+         
+            fitness = Fitness(
+                base = -loss,
+                intrinsic = intrinsic_fitness,
+                improvement = (-loss) - (-old_loss))
+        else:
+            fitness = Fitness(base=-loss, intrinsic=intrinsic_fitness)
+
+
+        return fitness, loss, acc
 
     # TODO lots of code duplication with MemorizationDataset
+    # TODO should I cache two policies?
     def eval(self, dna, val=False, cached_policy=None):
         #print("In eval", flush=True)
 
+        last_mutation = dna.seeds[-1]
+        dna.seeds = dna.seeds[:-1]
+
         if cached_policy and not (dna is None):
             #print("Updating cached policy:", flush=True)
-            policy_network = cached_policy.update_dna(dna)
+            old_policy_network = cached_policy.update_dna(dna)
         elif cached_policy and (dna is None):
-            policy_network = cached_policy
+            old_policy_network = cached_policy
         else:
             #print("Remaking policy", flush=True)
-            policy_network = self.policy_factory(dna, **self.policy_args)
+            old_policy_network = self.policy_factory(dna, **self.policy_args)
+
+        dna.seeds.append(last_mutation)
+        policy_network = old_policy_network.clone()
+        policy_network.generator = torch.Generator(device=self.device)
+        policy_network.update_dna(dna)
+
+
 
         #print("Done", flush=True)
-        loss, total_intrinsic_fitness, acc = self.eval_helper(policy_network, val=val)
+        fitness, loss, acc = self.eval_helper(policy_network, old_policy_network=old_policy_network, val=val)
 
 
         if not val:
             metadata = {
                 'train_loss': loss.item(),
                 'total_frames': self.x.shape[0], # TODO this may not be exact, 
-                'train_intrinsic_fitness': total_intrinsic_fitness,
+                'train_intrinsic_fitness': fitness.intrinsic,
+                'train_fitness': fitness.base,
                 }       
         else:
             metadata = {
                 'val_loss': loss.item(),
                 'val_acc': acc.item(),
                 'total_frames': self.x.shape[0], # TODO this may not be exact, 
-                'val_intrinsic_fitness': total_intrinsic_fitness,
+                'val_intrinsic_fitness': fitness.intrinsic,
+                'val_fitness': fitness.base,
                 }       
 
         for k,v in policy_network.metadata.items():
             metadata[k] = v # TODO check no overlap?
-        return (Individual(dna, (-1*loss.item(), total_intrinsic_fitness)), metadata), policy_network
+        return (Individual(dna, fitness), metadata), policy_network
 
 EvaluationMethod.register(MNIST)
 

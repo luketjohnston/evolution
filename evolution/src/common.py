@@ -1,6 +1,22 @@
 import torch
 from random import Random
 from collections import namedtuple
+from functools import total_ordering
+
+@total_ordering
+class Fitness():
+    def __init__(self, base, intrinsic, improvement=None):
+        self.base = base
+        self.intrinsic = intrinsic
+        self.improvement = improvement
+    def __lt__(self, other):
+        if self.improvement and other.improvement: 
+            return self.improvement < other.improvement
+        if self.base == other.base:
+            return self.intrinsic < other.intrinsic
+        return self.base < other.base
+    def __eq__(self, other):
+        return (self.improvement == other.improvement) and (self.base == other.base) and (self.intrinsic == other.intrinsic)
 
 MAXINT=2**31-1
 class RandomSeedGenerator(Random):

@@ -1,5 +1,6 @@
 
 import os
+import numpy as np
 import multiprocessing as mp
 import random
 from tensorboard import program
@@ -13,6 +14,7 @@ from itertools import product
 
 from tensorboard import program
 from torch.utils.tensorboard import SummaryWriter
+from binarized import EvoBinarizedMnistModel
 
 # TODO if I continue using this, make sure to acknowledge the reddit thread I got it from
 
@@ -23,18 +25,46 @@ same_batchs=[True]
 #lrs = [2.7E-2, 2.7e-3]
 lrs = [2.7e-2]
 mate_multipliers=[8]
-population_sizes = [256]
+population_sizes = [1024]
+#population_sizes = [256]
+#num_parents_for_matings = [4,16,64]
 num_parents_for_matings = [64]
 batch_sizes = [500] 
 hidden_sizes=[128]
-max_generation = 1000000
+max_generation = 30000*4
 #max_generation = 200
 target_acc = 0.97
-prefix = 'test_july21_1'
+#prefix = 'test'
+prefix = 'test'
 fitness_weights = True
 fitness_types = ['sampled_acc'] # 'cross_entropy','accuracy','sampled_acc'
-#load_from = 'saves/min_sampled_july17_1_hs128_sbTrue_lr0.027_mm8_bs500_ps256_mn64_rs3592498957.pt'
-load_from = ''
+model_type = 'EvoModel'
+load_from = 'saves/copy/min_july22_hyperparam_search3_hs128_sbTrue_lr0.027_mm8_bs500_ps1024_mn256_rs5096758358.pt' # 93.5 val acc
+elite=False
+
+
+
+# 5e-7 expects 20 mutations
+# 5e-8 expects 2, not much point going any lower than this
+# seems like 3e-8 actually works the best. 
+lrs = [-1]
+population_sizes = [16]
+num_parents_for_matings = [1]
+batch_sizes = [500]
+hidden_sizes=[4096] 
+prefix = 'binary_oneflip'
+fitness_weights=False
+fitness_types = ['cross_entropy'] # 'cross_entropy','accuracy','sampled_acc'
+load_from = 'saves/copy/min_binary_test1_hs4096_sbTrue_lr5e-07_mm8_bs500_ps20_mn1_rs3394362623_dcuda.pt'
+model_type = 'EvoBinarized'
+elite=True
+layers=2
+max_generation = 1000000
+
+
+#load_from = 'saves/copy/min_sampled_july17_1_hs128_sbTrue_lr0.027_mm8_bs500_ps256_mn64_rs3592498957.pt'
+#load_from = 'saves/copy/min_july22_hyperparam_search3_hs128_sbTrue_lr0.027_mm8_bs500_ps1024_mn256_rs5096758358.pt' # 93.5 val acc
+
 #fitness_types = ['cross_entropy'] # 'cross_entropy','accuracy','sampled_acc'
 
 #prefix = 'colab1'
@@ -47,13 +77,28 @@ load_from = ''
 
 val_batch_size = 500
 device = 'cuda' if torch.cuda.is_available() else 'mps'
-#device = 'mps'
+#device = 'cpu'
 
-eval_every_generation = 100
-upload_every = 10000
+eval_every_time = 180 # evaluation is done at specific time intervals, so it doesn't affect
+                     # the time-based comparison between different hyperparams. In seconds.
+
+#eval_every_time=5
+save_every_time=600
+
+upload_every = 50000
 
 for sb, lr, mm, ps, parents, bs, hs, ft  in product(same_batchs, lrs, mate_multipliers, population_sizes, num_parents_for_matings, batch_sizes, hidden_sizes, fitness_types):
     random_seed = random.randint(0,9999999999)
+
+    if mm == 8 and parents == 0.25 and lr == 2.7e-2: 
+        print("Skipping config, already tested...")
+        continue 
+
+    if parents < 1:
+        nump = int(parents * ps)
+    else:
+        nump = parents
+
     configs.append({
         'same_batch': sb,
         'lr': lr,
@@ -71,25 +116,15 @@ for sb, lr, mm, ps, parents, bs, hs, ft  in product(same_batchs, lrs, mate_multi
         'fitness_weights': fitness_weights,
         'fitness_type': ft,
         'load_from': load_from,
+        'elite': elite,
+        'layers': layers,
         })
 
-class DummyDataloader():
-  def __init__(self, batch_size, device):
-      self.mult = 25
-      self.batch_size = batch_size
-      self.device=device
-      self.x = torch.normal(mean=0, std=1.0, size=[batch_size*self.mult,28,28], device=device)
-      #print('xbytes:', self.x.element_size() * self.x.nelement())
-      self.y = torch.randint(low=0,high=10, size=[batch_size*self.mult], device=device)
-      #print('ybytes:', self.y.element_size() * self.y.nelement())
-  def __iter__(self):
-      while True:
-          r = random.randint(0,self.mult-1)
-          yield self.x[r*self.batch_size :(r+1)*self.batch_size], self.y[r*self.batch_size:(r+1)*self.batch_size]
 
 
 @torch.inference_mode()
-def evaluate(model: nn.Module, val_loader):
+def evaluate(model: nn.Module, val_loader, verbose=True):
+    t1 = time.time()
     model.eval()
     total = 0
     loss = 0
@@ -98,12 +133,21 @@ def evaluate(model: nn.Module, val_loader):
         input, target = input.to(device), target.to(device)
         #print('input.shape:', input.shape)
         #print('target.shape:', target.shape)
-        output = model.forward([input])[0].squeeze()
+        output = model.forward([input])
+        if type(output) is list:
+            output = output[0]
+        output = output.squeeze()
         #print('output.shape:', output.shape)
+        #print('target.shape:', target.shape)
         loss += F.cross_entropy(output, target, reduction='sum').item() 
+
+        #print('output: ', output)
+        #probs = torch.softmax(output, dim=1)
+        #print('probs: ', probs[0])
         pred = output.argmax(dim=-1, keepdim=True) 
         correct += pred.eq(target.view_as(pred)).sum().item() 
         total += input.size(0)
+    if verbose: print(f"Eval time: {time.time() -t1}")
 
     return loss / total, correct / total
 
@@ -188,7 +232,13 @@ class EvoModel(nn.Module):
 
 def upload_to_aws(experiment_name):
     os.system(f'aws s3 cp tensorboards/{experiment_name} s3://luke-genetics/{experiment_name} --recursive')
-    os.system(f'aws s3 cp saves/{experiment_name}.pt s3://luke-genetics/{experiment_name}.pt --recursive')
+    os.system(f'aws s3 cp saves/{experiment_name}.pt s3://luke-genetics/{experiment_name}.pt')
+
+# Make sure model is on cpu before saving otherwise it will take tons of space
+def save_model(model, config, experiment_name, verbose=True):
+    if verbose: print(f"Saving model to saves/{experiment_name}.pt ..."); t1 = time.time()
+    torch.save((model,config), open(f'saves/{experiment_name}.pt','wb'))
+    if verbose: print(f'done save in {time.time() - t1}')
 
 
 
@@ -212,7 +262,7 @@ def main(config):
     same_batch = config['same_batch']
     random_seed = config['random_seed']
 
-    experiment_name=f'min_{prefix}_hs{hidden_size}_sb{same_batch}_lr{lr}_mm{mate_multiplier}_bs{batch_size}_ps{population_size}_mn{num_parents_for_mating}_rs{random_seed}'
+    experiment_name=f'min_{prefix}_hs{hidden_size}_sb{same_batch}_lr{lr}_mm{mate_multiplier}_bs{batch_size}_ps{population_size}_mn{num_parents_for_mating}_rs{random_seed}_d{device}'
 
     tracking_address = f'./tensorboards/{experiment_name}'
     while os.path.exists(tracking_address):
@@ -222,8 +272,6 @@ def main(config):
     writer = SummaryWriter(log_dir=tracking_address)
     
 
-    if device == 'cuda':
-        mp.set_start_method('spawn')
 
     
     # TODO clean up the mps vs cuda logic
@@ -249,26 +297,38 @@ def main(config):
     #train_loader = torch.utils.data.DataLoader(train, batch_size=batch_size, num_workers=8, persistent_workers=True, shuffle=True, pin_memory=True, drop_last=True)
     print("initialization data")
     t1 = time.time()
-    #train_loader = DummyDataloader(batch_size * population_size, 'cpu') 
-    #train_loader = DummyDataloader(batch_size * population_size, device) 
     print(f"done in {time.time() - t1}")
     val_loader = torch.utils.data.DataLoader(val, val_batch_size, shuffle=False, pin_memory=False)
 
     if not config['load_from']:
-        model = EvoModel(hidden_size, mate_multiplier)
-        model = model.to(device)
+        if model_type == 'EvoModel':
+            model = EvoModel(hidden_size, mate_multiplier)
+            model = model.to(device)
+        elif model_type == 'EvoBinarized':
+            model = EvoBinarizedMnistModel(hidden_size=hidden_size, elite=config['elite'], layers=config['layers'])
+            model = model.to(device)
+        else:
+            assert False
     else:
         model,_ = torch.load(config['load_from'], map_location=device)
         print(f"Loaded model from {config['load_from']}")
 
+    # TODO make it so model.parameters() works
+    param_count = sum([np.prod(layer.w.size()) for layer in model.layers])
+    print('Param count: ', param_count)
+    print('Expected flips per mutation: ', config['lr'] * param_count)
+
     generation_count = 0
-    epoch = 0
     model.reset()
     loss, accuracy = evaluate(model, val_loader)
-    print(f'epoch {epoch} | loss: {loss:.4f} | accuracy: {accuracy:.2%}')
+    print(f'loss: {loss:.4f} | accuracy: {accuracy:.2%}')
     
     model.eval()
     t0 = time.time()
+    start = t0
+    last_eval = start
+    last_save = start
+    last_eval_generation = 0
     
     done = False
     while not done:
@@ -285,7 +345,25 @@ def main(config):
                 input = input.unsqueeze(0).expand((population_size, *input.shape))
                 target = target.unsqueeze(0).expand((population_size, *target.shape))
 
-                original_output, mutation_output = model.forward([input,input])
+                #print('input[0,0] == input[0,1]:', input[0,0] == input[0,1]) # these are not equiv
+                #print('input[0,0] == input[0,2]:', input[0,0] == input[0,2])
+
+                
+                r = model.forward([input,input])
+                if type(r) is tuple or type(r) is list:
+                    original_output, mutation_output = r
+                else:
+                    original_output, mutation_output = r.float(), r.float()
+                #print('mout:', mutation_output)
+                #print('mout.shape:', mutation_output.shape)
+                #print('mout[0,0]', mutation_output[0,0])
+                #print('mout[1,0]', mutation_output[1,0])
+                #print('mout[0,1]', mutation_output[0,1])
+
+                #assert(torch.sum(mutation_output[0,0] == mutation_output[0,1])  < mutation_output[0,1].shape[0])
+                #print('mutation_output[0,0] == mutation_output[0,2]:', mutation_output[0,0] == mutation_output[0,2])
+
+
 
             else:
                 input = input.unsqueeze(0).expand((population_size, *input.shape))
@@ -321,7 +399,13 @@ def main(config):
                 original_loss = original_loss.unflatten(0, (population_size, batch_size)).mean(dim=-1) 
                 mutation_loss = mutation_loss.unflatten(0, (population_size, batch_size)).mean(dim=-1) 
                 ave_fitness = -1 * mutation_loss.mean().item()
-                improvement = original_loss - mutation_loss
+
+
+                if model_type == 'EvoBinarized':
+                    improvement = - mutation_loss
+                else:
+                    improvement = original_loss - mutation_loss
+                #print(improvement)
 
             elif config['fitness_type'] == 'sampled_acc':
                 original_probs = torch.nn.functional.softmax(original_output, dim=-1)
@@ -346,31 +430,41 @@ def main(config):
                 model.mate(parents)
 
 
-            if generation_count % eval_every_generation == 0:
+            if (time.time() > last_eval + eval_every_time) or (generation_count > config['max_generation']):
+                last_eval = time.time()
                 dt = time.time() - t0
+
                 model.reset()
-                #if device == "mps":
-                #    torch.mps.synchronize()
-                #elif device == 'cuda':
-                #    torch.cuda.synchronize()
                 loss, accuracy = evaluate(model, val_loader)
+
                 writer.add_scalar('best_val_loss', loss, generation_count)
                 writer.add_scalar('best_val_acc', accuracy, generation_count)
-                print(f'gen {generation_count} | epoch {epoch} | loss: {loss:.4f} | accuracy: {accuracy:.2%} | seconds per generation: {dt/eval_every_generation:.3f}')
-                t0 = time.time()
+                writer.add_scalar('best_val_acc_time', accuracy, time.time() - start)
+                print(f'gen {generation_count} | loss: {loss:.4f} | accuracy: {accuracy:.2%} | elapsed time {time.time() - start:.1f} | seconds per generation: {dt/(generation_count - last_eval_generation):.3f}')
+                last_eval_generation = generation_count
 
-                torch.save((model,config), open(f'saves/{experiment_name}.pt','wb'))
+                if time.time() > last_save + save_every_time:
+                    save_model(model.cpu(), config, experiment_name, verbose=True)
+                    last_save = time.time()
+                    model.to(device)
 
-                if generation_count > config['max_generation'] or accuracy > config['target_acc']: 
+                if generation_count > config['max_generation'] or accuracy > config['target_acc']:
                     done=True
                     break
+                t0 = time.time()
+
             if generation_count % upload_every == 0:
+                save_model(model.cpu(), config, experiment_name, verbose=True)
+                model.to(device)
                 print("Uploading to aws...")
                 upload_to_aws(experiment_name)
     upload_to_aws(experiment_name)
 
 
 if __name__ == '__main__':
+
+    if device == 'cuda':
+        mp.set_start_method('spawn')
 
     #torch.set_num_threads(8)
 

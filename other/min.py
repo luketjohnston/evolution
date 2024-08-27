@@ -33,7 +33,7 @@ batch_sizes = [500]
 hidden_sizes=[128]
 max_generation = 30000*4
 #max_generation = 200
-target_acc = 0.97
+target_acc = 0.99
 #prefix = 'test'
 prefix = 'test'
 fitness_weights = True
@@ -49,17 +49,25 @@ elite=False
 # seems like 3e-8 actually works the best. 
 lrs = [-1]
 population_sizes = [16]
-num_parents_for_matings = [1]
-batch_sizes = [500]
+num_parents_for_matings = ['all']
+batch_sizes = ['all']
+#batch_sizes = [500]
+minibatch_size = 500
 hidden_sizes=[4096] 
-prefix = 'binary_oneflip'
+prefix = 'binary_bnorm1-1_aug15'
 fitness_weights=False
 fitness_types = ['cross_entropy'] # 'cross_entropy','accuracy','sampled_acc'
-load_from = 'saves/copy/min_binary_test1_hs4096_sbTrue_lr5e-07_mm8_bs500_ps20_mn1_rs3394362623_dcuda.pt'
+#load_from = 'saves/copy/min_binary_oneflip_all_aug13_2_hs4096_sbTrue_lr-1_mm8_bsall_ps16_mn1_rs6723654141_dcuda.pt'
+#load_from = 'saves/copy/min_binary_oneflip_all_aug13_1_hs4096_sbTrue_lr-1_mm8_bsall_ps16_mn1_rs2282136183_dcuda.pt'
+#load_from=''
+#load_from = 'saves/copy/min_binary_oneflip_mate_all_aug14_hs4096_sbTrue_lr-1_mm8_bs500_ps16_npall_rs4534314016_dmps_batch_norm.pt'
+load_from = 'saves/copy/min_binary_bnorm1_aug15_hs4096_sbTrue_lr-1_mm8_bsall_ps16_npall_rs6712504267_dcuda_batch_norm.pt'
 model_type = 'EvoBinarized'
 elite=True
 layers=2
-max_generation = 1000000
+max_generation = 2000
+#activation='batch_norm'
+activation='batch_norm'
 
 
 #load_from = 'saves/copy/min_sampled_july17_1_hs128_sbTrue_lr0.027_mm8_bs500_ps256_mn64_rs3592498957.pt'
@@ -79,11 +87,12 @@ val_batch_size = 500
 device = 'cuda' if torch.cuda.is_available() else 'mps'
 #device = 'cpu'
 
-eval_every_time = 180 # evaluation is done at specific time intervals, so it doesn't affect
+eval_every_time = 300 # evaluation is done at specific time intervals, so it doesn't affect
                      # the time-based comparison between different hyperparams. In seconds.
 
 #eval_every_time=5
 save_every_time=600
+
 
 upload_every = 50000
 
@@ -94,7 +103,7 @@ for sb, lr, mm, ps, parents, bs, hs, ft  in product(same_batchs, lrs, mate_multi
         print("Skipping config, already tested...")
         continue 
 
-    if parents < 1:
+    if (not type(parents) == str) and parents < 1:
         nump = int(parents * ps)
     else:
         nump = parents
@@ -118,6 +127,7 @@ for sb, lr, mm, ps, parents, bs, hs, ft  in product(same_batchs, lrs, mate_multi
         'load_from': load_from,
         'elite': elite,
         'layers': layers,
+        'minibatch_size': minibatch_size,
         })
 
 
@@ -240,6 +250,48 @@ def save_model(model, config, experiment_name, verbose=True):
     torch.save((model,config), open(f'saves/{experiment_name}.pt','wb'))
     if verbose: print(f'done save in {time.time() - t1}')
 
+def compute_loss(original_output, mutation_output, target, config):
+    population_size = config['population_size']
+    batch_size = original_output.shape[1]
+
+    if config['fitness_type'] == 'accuracy':
+        original_pred = original_output.argmax(dim=-1, keepdim=True) 
+        original_correct = original_pred.eq(target.view_as(original_pred)).sum(dim=[1,2])
+        mutation_pred = mutation_output.argmax(dim=-1, keepdim=True) 
+        mutation_correct = mutation_pred.eq(target.view_as(mutation_pred)).sum(dim=[1,2])
+    
+        ave_fitness = mutation_correct.float().mean().item()
+        improvements = mutation_correct.float() - original_correct.float()
+    
+    elif config['fitness_type'] == 'cross_entropy':
+        original_loss = F.cross_entropy(original_output.flatten(0, 1), target.flatten(0,1), reduction='none') 
+        mutation_loss = F.cross_entropy(mutation_output.flatten(0, 1), target.flatten(0,1), reduction='none') 
+
+        original_loss = original_loss.unflatten(0, (population_size, batch_size)).mean(dim=-1) 
+        mutation_loss = mutation_loss.unflatten(0, (population_size, batch_size)).mean(dim=-1) 
+        ave_fitness = -1 * mutation_loss.mean().item()
+    
+    
+        if model_type == 'EvoBinarized':
+            improvements = - mutation_loss + mutation_loss[0] 
+        else:
+            improvements = original_loss - mutation_loss
+    
+    elif config['fitness_type'] == 'sampled_acc':
+        original_probs = torch.nn.functional.softmax(original_output, dim=-1)
+        mutation_probs = torch.nn.functional.softmax(mutation_output, dim=-1)
+    
+        original_pred = torch.multinomial(original_probs.view(-1,10), num_samples=1).view((population_size, batch_size, 1))
+        original_correct = original_pred.eq(target.view_as(original_pred)).sum(dim=[1,2])
+        mutation_pred = torch.multinomial(mutation_probs.view(-1,10), num_samples=1).view((population_size, batch_size, 1))
+        mutation_correct = mutation_pred.eq(target.view_as(mutation_pred)).sum(dim=[1,2])
+    
+        ave_fitness = mutation_correct.float().mean().item() / original_probs.shape[1]
+        improvements = mutation_correct.float() - original_correct.float()
+    else:
+        assert False
+    return improvements, ave_fitness
+
 
 
 @torch.inference_mode()
@@ -262,7 +314,7 @@ def main(config):
     same_batch = config['same_batch']
     random_seed = config['random_seed']
 
-    experiment_name=f'min_{prefix}_hs{hidden_size}_sb{same_batch}_lr{lr}_mm{mate_multiplier}_bs{batch_size}_ps{population_size}_mn{num_parents_for_mating}_rs{random_seed}_d{device}'
+    experiment_name=f'min_{prefix}_hs{hidden_size}_sb{same_batch}_lr{lr}_mm{mate_multiplier}_bs{batch_size}_ps{population_size}_np{num_parents_for_mating}_rs{random_seed}_d{device}_{activation}'
 
     tracking_address = f'./tensorboards/{experiment_name}'
     while os.path.exists(tracking_address):
@@ -305,7 +357,7 @@ def main(config):
             model = EvoModel(hidden_size, mate_multiplier)
             model = model.to(device)
         elif model_type == 'EvoBinarized':
-            model = EvoBinarizedMnistModel(hidden_size=hidden_size, elite=config['elite'], layers=config['layers'])
+            model = EvoBinarizedMnistModel(hidden_size=hidden_size, elite=config['elite'], layers=config['layers'], activation=activation)
             model = model.to(device)
         else:
             assert False
@@ -320,8 +372,8 @@ def main(config):
 
     generation_count = 0
     model.reset()
-    loss, accuracy = evaluate(model, val_loader)
-    print(f'loss: {loss:.4f} | accuracy: {accuracy:.2%}')
+    #loss, accuracy = evaluate(model, val_loader)
+    #print(f'loss: {loss:.4f} | accuracy: {accuracy:.2%}')
     
     model.eval()
     t0 = time.time()
@@ -338,96 +390,76 @@ def main(config):
             input, target = input.to(device), target.to(device)
 
         
-            if not batch_size == 'all':
+            #if not batch_size == 'all':
+            if True:
                 #input = input.view((population_size, batch_size, *input.shape[1:]))
                 #target = target.view((population_size, batch_size, *target.shape[1:]))
 
-                input = input.unsqueeze(0).expand((population_size, *input.shape))
-                target = target.unsqueeze(0).expand((population_size, *target.shape))
+                minibatch_x = torch.split(input, config['minibatch_size'], dim=0)
+                minibatch_y = torch.split(target, config['minibatch_size'], dim=0)
+                num_minibatches = len(minibatch_x)
 
-                #print('input[0,0] == input[0,1]:', input[0,0] == input[0,1]) # these are not equiv
-                #print('input[0,0] == input[0,2]:', input[0,0] == input[0,2])
 
-                
-                r = model.forward([input,input])
-                if type(r) is tuple or type(r) is list:
-                    original_output, mutation_output = r
-                else:
-                    original_output, mutation_output = r.float(), r.float()
-                #print('mout:', mutation_output)
-                #print('mout.shape:', mutation_output.shape)
-                #print('mout[0,0]', mutation_output[0,0])
-                #print('mout[1,0]', mutation_output[1,0])
-                #print('mout[0,1]', mutation_output[0,1])
+                improvements = torch.zeros(population_size, device=device)
+                ave_fitness = 0
+
+                for input, target in zip(minibatch_x, minibatch_y):
+                    input = input.unsqueeze(0).expand((population_size, *input.shape))
+                    target = target.unsqueeze(0).expand((population_size, *target.shape))
+
+                    #print('input[0,0] == input[0,1]:', input[0,0] == input[0,1]) # these are not equiv
+                    #print('input[0,0] == input[0,2]:', input[0,0] == input[0,2])
+
+                    
+                    r = model.forward([input,input])
+                    if type(r) is tuple or type(r) is list:
+                        original_output, mutation_output = r
+                    else:
+                        original_output, mutation_output = r.float(), r.float()
+
+                    improvements_mb, ave_fitness = compute_loss(original_output, mutation_output, target, config)
+                    improvements += improvements_mb
+                    ave_fitness += ave_fitness / num_minibatches
+                    #print(improvements)
+
 
                 #assert(torch.sum(mutation_output[0,0] == mutation_output[0,1])  < mutation_output[0,1].shape[0])
                 #print('mutation_output[0,0] == mutation_output[0,2]:', mutation_output[0,0] == mutation_output[0,2])
 
 
 
-            else:
-                input = input.unsqueeze(0).expand((population_size, *input.shape))
-                target = target.unsqueeze(0).expand((population_size, *target.shape))
-                original_outputs = []
-                mutation_outputs = []
-                #for input, target in zip(torch.split(input, 500, dim=1), torch.split(target, 500, dim=1)):
-                assert False
-                for input in torch.split(input, 500, dim=1):
-                    original_output, mutation_output = model.forward([input,input])
-                    original_outputs.append(original_output)
-                    mutation_outputs.append(mutation_output)
-                original_output = torch.concat(original_outputs,dim=1)
-                mutation_output = torch.concat(mutation_outputs,dim=1)
+            #else:
+            #    input = input.unsqueeze(0).expand((population_size, *input.shape))
+            #    target = target.unsqueeze(0).expand((population_size, *target.shape))
+            #    original_outputs = []
+            #    mutation_outputs = []
+            #    #for input, target in zip(torch.split(input, 500, dim=1), torch.split(target, 500, dim=1)):
+            #    assert False
+            #    for input in torch.split(input, 500, dim=1):
+            #        original_output, mutation_output = model.forward([input,input])
+            #        original_outputs.append(original_output)
+            #        mutation_outputs.append(mutation_output)
+            #    original_output = torch.concat(original_outputs,dim=1)
+            #    mutation_output = torch.concat(mutation_outputs,dim=1)
         
 
             generation_count += 1
             #print(generation_count)
         
 
-            if config['fitness_type'] == 'accuracy':
-                original_pred = original_output.argmax(dim=-1, keepdim=True) 
-                original_correct = original_pred.eq(target.view_as(original_pred)).sum(dim=[1,2])
-                mutation_pred = mutation_output.argmax(dim=-1, keepdim=True) 
-                mutation_correct = mutation_pred.eq(target.view_as(mutation_pred)).sum(dim=[1,2])
-
-                ave_fitness = mutation_correct.float().mean().item()
-                improvement = mutation_correct.float() - original_correct.float()
-
-            elif config['fitness_type'] == 'cross_entropy':
-                original_loss = F.cross_entropy(original_output.flatten(0, 1), target.flatten(0,1), reduction='none') 
-                mutation_loss = F.cross_entropy(mutation_output.flatten(0, 1), target.flatten(0,1), reduction='none') 
-                original_loss = original_loss.unflatten(0, (population_size, batch_size)).mean(dim=-1) 
-                mutation_loss = mutation_loss.unflatten(0, (population_size, batch_size)).mean(dim=-1) 
-                ave_fitness = -1 * mutation_loss.mean().item()
-
-
-                if model_type == 'EvoBinarized':
-                    improvement = - mutation_loss
-                else:
-                    improvement = original_loss - mutation_loss
-                #print(improvement)
-
-            elif config['fitness_type'] == 'sampled_acc':
-                original_probs = torch.nn.functional.softmax(original_output, dim=-1)
-                mutation_probs = torch.nn.functional.softmax(mutation_output, dim=-1)
-
-                original_pred = torch.multinomial(original_probs.view(-1,10), num_samples=1).view((population_size, batch_size, 1))
-                original_correct = original_pred.eq(target.view_as(original_pred)).sum(dim=[1,2])
-                mutation_pred = torch.multinomial(mutation_probs.view(-1,10), num_samples=1).view((population_size, batch_size, 1))
-                mutation_correct = mutation_pred.eq(target.view_as(mutation_pred)).sum(dim=[1,2])
-
-                ave_fitness = mutation_correct.float().mean().item() / original_probs.shape[1]
-                improvement = mutation_correct.float() - original_correct.float()
-            else:
-                assert False
 
             writer.add_scalar('ave_fitness', ave_fitness, generation_count)
 
-            parents = torch.topk(improvement, k=num_parents_for_mating, largest=True).indices.tolist() 
-            if config['fitness_weights']:
-                model.mate(parents, improvement[parents])
+            if num_parents_for_mating == 'all':
+                parents = (improvements > 0).nonzero().squeeze(dim=1).cpu()
             else:
-                model.mate(parents)
+                parents = torch.topk(improvements, k=num_parents_for_mating, largest=True).indices.tolist() 
+
+            if config['fitness_weights']:
+                #num_parents_for_mating also serves to indicate what type of mating to do
+                model.mate(parents, num_parents_for_mating=num_parents_for_mating, fitness_weights=improvement[parents])
+            else:
+                model.mate(parents, num_parents_for_mating=num_parents_for_mating)
 
 
             if (time.time() > last_eval + eval_every_time) or (generation_count > config['max_generation']):
@@ -454,6 +486,7 @@ def main(config):
                 t0 = time.time()
 
             if generation_count % upload_every == 0:
+                model.reset()
                 save_model(model.cpu(), config, experiment_name, verbose=True)
                 model.to(device)
                 print("Uploading to aws...")

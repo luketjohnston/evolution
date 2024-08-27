@@ -15,7 +15,7 @@ def worker(queue, population_size, batch_size, device, same_batch, x, y):
   # TODO ensure indices don't repeat in any single minibatch
   while True:
     if not same_batch:
-        indices = torch.randint(low=0, high=len(ds), size=(population_size * batch_size,), device=None)
+        indices = torch.randint(low=0, high=x.shape[0], size=(population_size * batch_size,), device=None)
         #print(indices.shape)
         xi = x[indices]
         yi = y[indices]
@@ -28,7 +28,7 @@ def worker(queue, population_size, batch_size, device, same_batch, x, y):
             pass
     else:
         if batch_size != 'all':
-            indices = torch.randint(low=0, high=len(ds), size=(batch_size,), device=None)
+            indices = torch.randint(low=0, high=x.shape[0], size=(batch_size,), device=None)
             #print(indices.shape)
             xi = x[indices]
             yi = y[indices]
@@ -47,9 +47,9 @@ def worker(queue, population_size, batch_size, device, same_batch, x, y):
 class MPD():
     def __init__(self, population_size, batch_size, num_workers, prefetch_num, device, same_batch=False):
     
-       ds = torchvision.datasets.MNIST('./data/mnist', train=True, download=False)
-       self.x = ds.data / 255.0
-       self.y = ds.targets
+        ds = torchvision.datasets.MNIST('./data/mnist', train=True, download=False)
+        self.x = ds.data / 255.0
+        self.y = ds.targets
 
 
         print("PREFETCH NUM:", prefetch_num, type(prefetch_num))

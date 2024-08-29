@@ -29,8 +29,8 @@ const unsigned int POPULATION_SIZE{16};
 // so it has to be at least 32*32
 const unsigned int IN_SIZE{32*32}; // in bits
 const unsigned int OUT_SIZE{128}; // in bits
-const unsigned int IN_INTS{IN_SIZE / 8 / sizeof(unsigned long)}; 
-const unsigned int OUT_INTS{OUT_SIZE / 8 / sizeof(unsigned long)};
+const unsigned int IN_INTS{IN_SIZE / 8 / sizeof(int64_t)}; 
+const unsigned int OUT_INTS{OUT_SIZE / 8 / sizeof(int64_t)};
 
 // 32 * 32 = 1024, the max threads per block.
 // a full warp (32 threads) is used to compute a single output
@@ -43,11 +43,11 @@ const unsigned int OUT_TILE_Y_INTS{32};
 const unsigned int SUBTILE_INTS{32};
 
 const unsigned int WEIGHT_SIZE{POPULATION_SIZE * IN_SIZE * OUT_SIZE * 2}; // *2 since we have a weight for the input and for the inverted input
-const unsigned int WEIGHT_INTS{WEIGHT_SIZE / 8 / sizeof(unsigned long)};
+const unsigned int WEIGHT_INTS{WEIGHT_SIZE / 8 / sizeof(int64_t)};
 
 namespace binary_forward {
 
-typedef unsigned long myIntType_t;
+typedef int64_t myIntType_t;
 
 __host__ __device__ void printbinary(myIntType_t i) {
     printf(BBP BBP BBP BBP "\n", BB(i>>24), BB(i>>16), BB(i>>8), BB(i));
@@ -108,7 +108,7 @@ void host_op(
     const myIntType_t in_ints,
     const myIntType_t out_size
     ) {
-  const myIntType_t out_ints = out_size / 8 / sizeof(unsigned long);
+  const myIntType_t out_ints = out_size / 8 / sizeof(int64_t);
 
   for( intType_t b = 0; b < batch_size; b++) {
     for( intType_t p = 0; p < population_size; p++) {
@@ -145,14 +145,14 @@ at::Tensor host_helper(at::Tensor input, at::Tensor weight, int thresh) {
 
   at::Tensor input_contig = input.contiguous();
   at::Tensor weight_contig = weight.contiguous();
-  const unsigned long* input_ptr = (unsigned long *) input_contig.data_ptr();
-  const unsigned long* weight_ptr = (unsigned long *) weight_contig.data_ptr();
+  const int64_t* input_ptr = (int64_t *) input_contig.data_ptr();
+  const int64_t* weight_ptr = (int64_t *) weight_contig.data_ptr();
   at::Tensor output;
   auto options = input_contig.options().dtype(torch::kInt64);
   const unsigned int out_ints  = (out_size + 63) / 64;
   const unsigned int in_ints  = (input_size + 63) / 64;
   output = torch::empty({population_size*batch_size*out_ints}, options);
-  unsigned long* output_ptr = (unsigned long *) output.data_ptr();
+  int64_t* output_ptr = (int64_t *) output.data_ptr();
   host_op(input_ptr, weight_ptr, output_ptr, thresh, population_size, batch_size, in_ints, out_size);
   return output;
 }
@@ -194,7 +194,7 @@ __global__ void binary_forward(
   const intType_t output_tile_x = blockIdx.x * out_tile_x_ints;
   const intType_t output_tile_y = blockIdx.y * out_tile_y_ints;
   const intType_t b = output_tile_y + threadIdx.y;
-  const unsigned int out_ints = out_size / 8 / sizeof(unsigned long);
+  const unsigned int out_ints = out_size / 8 / sizeof(int64_t);
 
   const intType_t p = blockIdx.z;
 
@@ -255,7 +255,7 @@ __global__ void binary_forward_with_threshold(
   const intType_t output_tile_x = blockIdx.x * out_tile_x_ints;
   const intType_t output_tile_y = blockIdx.y * out_tile_y_ints;
   const intType_t b = output_tile_y + threadIdx.y;
-  const unsigned int out_ints = out_size / 8 / sizeof(unsigned long);
+  const unsigned int out_ints = out_size / 8 / sizeof(int64_t);
 
   const intType_t p = blockIdx.z;
 
@@ -301,7 +301,7 @@ __global__ void binary_forward_with_threshold(
 at::Tensor binary_forward_cuda(
         const at::Tensor& input, 
         const at::Tensor& weight, 
-        const unsigned int thresh
+        const int64_t thresh
         ) {
 
 
@@ -333,8 +333,8 @@ at::Tensor binary_forward_cuda(
   //unsigned int output_tensor_size[1] = {population_size*batch_size*out_size};
   //unsigned int output_tensor_size_array_ref = ArrayRef(&output_tensor_size, 1);
 
-  const unsigned long* input_ptr = (unsigned long *) input_contig.data_ptr();
-  const unsigned long* weight_ptr = (unsigned long *) weight_contig.data_ptr();
+  const int64_t* input_ptr = (int64_t *) input_contig.data_ptr();
+  const int64_t* weight_ptr = (int64_t *) weight_contig.data_ptr();
 
   const dim3 threads(32, 32, 1); // set to 1 while we are testing batch size 1 TODO
   const unsigned int out_tile_y_ints = 32; // stay 32 to match warp size
@@ -347,14 +347,14 @@ at::Tensor binary_forward_cuda(
   at::Tensor output;
 
   if (thresh > 0) {
-      // TODO change 64s to sizeof(unsigned long)
+      // TODO change 64s to sizeof(int64_t)
       const unsigned int out_ints  = (out_size + 63) / 64;
 
       // TODO I don't think this works when out_size is not a multiple of 64
       auto options = input_contig.options().dtype(torch::kInt64);
 
       output = torch::empty({population_size*batch_size*out_ints}, options);
-      unsigned long* output_ptr = (unsigned long *) output.data_ptr();
+      int64_t* output_ptr = (int64_t *) output.data_ptr();
 
       // TODO check that this integer division works like I expect
       const dim3 blocks(out_ints, (batch_size + out_tile_y_ints - 1) / out_tile_y_ints, population_size);
@@ -401,9 +401,9 @@ at::Tensor binary_forward_cuda(
   return output;
 }
 
-//TORCH_LIBRARY(binary_forward, m) {
-//  m.impl("binary_forward_with_threshold", &binary_forward_with_threshold);
-//}
+TORCH_LIBRARY(binary_forward, m) {
+  m.def("binary_forward_cuda", &binary_forward_cuda);
+}
 
 }
 
@@ -434,8 +434,8 @@ int main( int argc, char *argv[] )
         .requires_grad(false);
 
 
-  const long maxlong = std::numeric_limits<long>::max();
-  const long minlong = std::numeric_limits<long>::min();
+  const int64_t maxlong = std::numeric_limits<int64_t>::max();
+  const int64_t minlong = std::numeric_limits<int64_t>::min();
 
 
   const at::Tensor h_input = torch::randint(minlong,maxlong,{IN_INTS,BATCH_SIZE,POPULATION_SIZE},options);

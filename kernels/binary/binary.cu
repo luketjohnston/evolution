@@ -93,7 +93,7 @@ void host_op(
           //if (VERBOSE && b == 1) {printf("Setting output o: %u o_int_index: %u to bit_to_set: %u\n", o, o_int_index, bit_to_set); };
           out[o_ind(b,p,o_int_index,population_size,out_int32s)] = out[o_ind(b,p,o_int_index,population_size,out_int32s)] | bit_to_set;
         } else {
-          if (verbose) {printf("Setting output b: %u o: %u temp: %d\n", b, o, temp); };
+          //if (verbose) {printf("Setting output b: %u o: %u temp: %d\n", b, o, temp); };
           // need to multiple o by 2 since we will eventually convert this back to (device_inttype *) with 64-bit entries.
           // (meaning, we only want to set every other 32-bit entry)
           out[o_ind(b,p,2*o,population_size,out_size*2)] = temp;
@@ -212,15 +212,15 @@ __global__ void binary_forward(
       // Note that we will be computing this section for some invalid outputs,
       // but we jsut don't write them into out[] in the final if statement 
       if (b < batch_size && (j + tile_i * warp_size < in_ints)) {
-        device_inttype tmp = acc + 0;
+        //device_inttype tmp = acc + 0;
 
         acc += __popcll(input_tile[threadIdx.y * warp_size + j] & weight_tile[j * warp_size + threadIdx.x]);
-        device_inttype d1 = acc - tmp;
+        //device_inttype d1 = acc - tmp;
         acc += __popcll((~input_tile[threadIdx.y * warp_size + j]) & not_weight_tile[j * warp_size + threadIdx.x]);
-        device_inttype d2 = acc - tmp - d1;
+        //device_inttype d2 = acc - tmp - d1;
         //if (verbose) {printf("tmp: %ld, acc: %ld, d1: %ld, d2: %ld, x: %u, y: %u, b: %u\n", tmp, acc, d1, d2, threadIdx.x, threadIdx.y, b);};
-        if (verbose) {printf("b: %u, x:%u y:%u j:%u Added d1: %ld and d2: %ld to acc to get acc %ld\n", b, threadIdx.x, threadIdx.y, j, d1, d2, acc);};
-        if (verbose) {printf("b: %u, x: %u, y: %u, j: %u, ~input_tile[threadIdx.y * warp_size + j]: %ld, not_weight_tile[j*warp_size + threadIdx.x]: %ld\n", b, threadIdx.x, threadIdx.y, j, ~input_tile[threadIdx.y * warp_size + j], not_weight_tile[j * warp_size + threadIdx.x]);};
+        //if (verbose) {printf("b: %u, x:%u y:%u j:%u Added d1: %ld and d2: %ld to acc to get acc %ld\n", b, threadIdx.x, threadIdx.y, j, d1, d2, acc);};
+        //if (verbose) {printf("b: %u, x: %u, y: %u, j: %u, ~input_tile[threadIdx.y * warp_size + j]: %ld, not_weight_tile[j*warp_size + threadIdx.x]: %ld\n", b, threadIdx.x, threadIdx.y, j, ~input_tile[threadIdx.y * warp_size + j], not_weight_tile[j * warp_size + threadIdx.x]);};
         //if (verbose) {
         //  std::cout << "b: " << b << "x:" << threadIdx.x << "y: " << threadIdx.y << "j: " << "d1: " << d1 << "d2: " << d2 << "acc: " << acc << std::endl;
         //}
@@ -277,7 +277,7 @@ __global__ void binary_forward_with_threshold(
     // Load input into shared memory
     //if (threadIdx.x < warp_size) { 
     if (threadIdx.x < warp_size &&  b < batch_size && i < in_ints) { 
-      if (verbose && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u setting input\n", threadIdx.x, threadIdx.y);};
+      //if (verbose && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u setting input\n", threadIdx.x, threadIdx.y);};
       input_tile[threadIdx.y * warp_size + threadIdx.x] = input[i_ind(b, p, i, population_size, in_ints)]; 
     }
 
@@ -287,11 +287,11 @@ __global__ void binary_forward_with_threshold(
     // TODO need to set output integers to be 32 bits and the rest to be 64 
     intType_t w_o_to_load = blockIdx.x * warp_size + threadIdx.x;
 
-    if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u w_i_to_load: %u in_ints: %u\n", threadIdx.x, threadIdx.y, w_i_to_load, in_ints);};
+    //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u w_i_to_load: %u in_ints: %u\n", threadIdx.x, threadIdx.y, w_i_to_load, in_ints);};
     if (w_i_to_load < in_ints) {
       // "o" varies with threadIdx.x and is the last coord so access is coalesced
 
-      if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u setting shared mem weights w_i_to_load %u w_o_to_load %u \n", threadIdx.x, threadIdx.y, w_i_to_load, w_o_to_load);};
+      //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u setting shared mem weights w_i_to_load %u w_o_to_load %u \n", threadIdx.x, threadIdx.y, w_i_to_load, w_o_to_load);};
 
       weight_tile[    threadIdx.y * warp_size +  threadIdx.x] = weight[w_ind(0, p, w_i_to_load, w_o_to_load, population_size, in_ints, out_size)]; 
       not_weight_tile[threadIdx.y * warp_size +  threadIdx.x] = weight[w_ind(1, p, w_i_to_load, w_o_to_load, population_size, in_ints, out_size)]; 
@@ -303,24 +303,24 @@ __global__ void binary_forward_with_threshold(
 
       //if (true) {
       
-      if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u, j:%u,  j+tile_i*warp_size:%u \n" , threadIdx.x, threadIdx.y, j, j + tile_i * warp_size);};
+      //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u, j:%u,  j+tile_i*warp_size:%u \n" , threadIdx.x, threadIdx.y, j, j + tile_i * warp_size);};
 
       if (b < batch_size && (j + tile_i * warp_size < in_ints)) { // TODO double check?
 
         device_inttype x1 = input_tile[threadIdx.y * warp_size + j];
-        if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: input_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
+        //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: input_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
 
         x1 = weight_tile[j * warp_size + threadIdx.x];
-        if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: weight_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
+        //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: weight_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
         x1 = not_weight_tile[j * warp_size + threadIdx.x];
-        if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: not_weight_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
+        //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: not_weight_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
 
-        unsigned int tmp = acc;
+        //unsigned int tmp = acc;
 
         acc += __popcll(input_tile[threadIdx.y * warp_size + j] & weight_tile[j * warp_size + threadIdx.x]);
         acc += __popcll((~input_tile[threadIdx.y * warp_size + j]) & not_weight_tile[j * warp_size + threadIdx.x]);
 
-        if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u adding to acc: %u \n" , threadIdx.x, threadIdx.y, j, acc - tmp);};
+        //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u adding to acc: %u \n" , threadIdx.x, threadIdx.y, j, acc - tmp);};
 
       } 
     }
@@ -331,7 +331,7 @@ __global__ void binary_forward_with_threshold(
 
   __syncthreads(); // TODO I dont think we need this
 
-  if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u acc:%u:\n" , threadIdx.x, threadIdx.y, acc);};
+  //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u acc:%u:\n" , threadIdx.x, threadIdx.y, acc);};
 
   // activemask will always be 1111..., TODO 
   unsigned int r = __ballot_sync(__activemask(), acc >= thresh);

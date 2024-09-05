@@ -11,7 +11,7 @@
 #include "cublas_v2.h"
 #include "debug.h"
 #include <time.h> // for srand init
-#include "binary.h"
+#include "binary.cuh"
 #define  torch_device_inttype torch::kInt64
 #define  torch_output_inttype torch::kInt32
 

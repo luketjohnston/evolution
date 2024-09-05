@@ -307,12 +307,12 @@ __global__ void binary_forward_with_threshold(
 
       if (b < batch_size && (j + tile_i * warp_size < in_ints)) { // TODO double check?
 
-        device_inttype x1 = input_tile[threadIdx.y * warp_size + j];
+        //device_inttype x1 = input_tile[threadIdx.y * warp_size + j];
         //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: input_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
 
-        x1 = weight_tile[j * warp_size + threadIdx.x];
+        //x1 = weight_tile[j * warp_size + threadIdx.x];
         //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: weight_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
-        x1 = not_weight_tile[j * warp_size + threadIdx.x];
+        //x1 = not_weight_tile[j * warp_size + threadIdx.x];
         //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: not_weight_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
 
         //unsigned int tmp = acc;

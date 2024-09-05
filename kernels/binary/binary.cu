@@ -42,8 +42,8 @@ __host__ __device__ intType_t i_ind(const intType_t b, const intType_t p, const 
 }
 
 // note that o is the index into output as an array of integers, NOT as an array of bits.
-__host__ __device__ intType_t o_ind(const intType_t b, const intType_t p, const intType_t o, const device_inttype population_size, const device_inttype out_ints) {
-  return b * population_size * out_ints + p * out_ints + o;
+__host__ __device__ intType_t o_ind(const intType_t p, const intType_t b, const intType_t o, const device_inttype batch_size, const device_inttype out_ints) {
+  return p * batch_size * out_ints + b * out_ints + o;
 }
 
 // note the "o" arg to w_ind should be different than the "o" arg to o_ind above.
@@ -91,12 +91,12 @@ void host_op(
           device_inttype bit_to_set = (temp >= thresh) << (o % (OUTPUT_INTTYPE_BITS));
           device_inttype o_int_index = o / (OUTPUT_INTTYPE_BITS);
           //if (VERBOSE && b == 1) {printf("Setting output o: %u o_int_index: %u to bit_to_set: %u\n", o, o_int_index, bit_to_set); };
-          out[o_ind(b,p,o_int_index,population_size,out_int32s)] = out[o_ind(b,p,o_int_index,population_size,out_int32s)] | bit_to_set;
+          out[o_ind(p,b,o_int_index,batch_size,out_int32s)] = out[o_ind(p,b,o_int_index,batch_size,out_int32s)] | bit_to_set;
         } else {
           //if (verbose) {printf("Setting output b: %u o: %u temp: %d\n", b, o, temp); };
           // need to multiple o by 2 since we will eventually convert this back to (device_inttype *) with 64-bit entries.
           // (meaning, we only want to set every other 32-bit entry)
-          out[o_ind(b,p,2*o,population_size,out_size*2)] = temp;
+          out[o_ind(p,b,2*o,batch_size,out_size*2)] = temp;
         }
       }
     }
@@ -235,7 +235,7 @@ __global__ void binary_forward(
   }
   //if (true) { 
   if (b < batch_size && output_tile_x + threadIdx.x < out_size) { 
-    out[o_ind(b,p,output_tile_x + threadIdx.x,population_size,out_size)] = acc;
+    out[o_ind(p,b,output_tile_x + threadIdx.x,batch_size,out_size)] = acc;
   }
 }
 
@@ -338,7 +338,7 @@ __global__ void binary_forward_with_threshold(
   // after ballot_sync, only one thread per warp needs to write to output
   //if (threadIdx.x % warp_size == 0) {
   if (threadIdx.x % warp_size == 0 && b < batch_size) {
-    out[o_ind(b,p,output_tile_x,population_size,out_int32s)] = r;
+    out[o_ind(p,b,output_tile_x,batch_size,out_int32s)] = r;
   }
   __syncthreads(); // TODO I dont think we need this
 }
@@ -359,6 +359,8 @@ at::Tensor binary_forward_cuda(
   
   TORCH_CHECK(input.sizes().size() == 3); // population, batch, input
   TORCH_CHECK(weight.sizes().size() == 4); // 2, population, input, output
+
+  TORCH_CHECK(weight.sizes()[0] == 2); // 2, population, input, output
 
   // TODO we shouldn't need this check, need to make kernel work for any batch size etc.
   //TORCH_CHECK(input.sizes()[1] >= 32); 

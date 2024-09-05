@@ -1,7 +1,9 @@
 
+import numpy as np
 import torch
 import torchvision
 import multiprocessing as mp
+from torchvision import datasets, transforms
 
 
 def worker(queue, population_size, batch_size, device, same_batch, x, y):
@@ -103,8 +105,57 @@ if __name__ == '__main__':
       print(y.shape)
 
 
+class BinarizedMnistDataloader():
+    def __init__(self, device, train):
+    
+        x, y = get_all_binarized_mnist(train)
+
+        self.x = torch.tensor(x).to(device)
+        self.y = torch.tensor(y).to(device)
+
+    def __iter__(self):
+        while True:
+            yield self.x, self.y
 
     
+# Deprecated, use the binarize full dataset method below
+# def binarize_mnist(image):
+#   x = image / 255.0
+#   x = x > 0.5 # convert input to binary
+#   x = x.view((*x.shape[:-2], -1)) # flatten
+#   if not (x.shape[0] % 64 == 0):
+#       x = np.pad(x, (0,64 - (x.shape[0] % 64)), 'constant')
+# 
+#   dt = np.dtype(np.int64)
+#   dt = dt.newbyteorder('big')
+# 
+#   x = np.frombuffer(np.packbits(x,bitorder='big').data, dtype=dt)
+#   return x
     
+
+def get_all_binarized_mnist(train=False):
+  transform=transforms.Compose([
+      transforms.ToTensor(),
+  ])
+
+  if train:
+    ds = datasets.MNIST('./data/mnist', train=True, download=False, transform=transform)
+  else:
+    ds = datasets.MNIST('./data/mnist', train=False, download=False, transform=transform)
+  y = ds.targets
+  x = ds.data
+  x = x > 0.5 # convert input to binary
+  x = x.view((*x.shape[:-2], -1)) # flatten
+
+  if not (x.shape[-1] % 64 == 0):
+      x = np.pad(x, ((0,0),(0,64 - (x.shape[-1] % 64))), 'constant')
+
+  dt = np.dtype(np.int64)
+  dt = dt.newbyteorder('big')
+
+  x = np.frombuffer(np.packbits(x,bitorder='big').data, dtype=dt)
+  x = np.reshape(x, (ds.data.shape[0], -1))
+  x = x.astype(np.int64)
+  return x,y
     
     

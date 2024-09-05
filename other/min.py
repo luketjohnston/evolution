@@ -9,38 +9,40 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import transforms, datasets
 import time
-from my_perfect_dataloader import MPD, SyncMPD
+from my_perfect_dataloader import MPD, SyncMPD, BinarizedMnistDataloader
 from itertools import product
 
 from tensorboard import program
 from torch.utils.tensorboard import SummaryWriter
 from binarized import EvoBinarizedMnistModel
+from evo import EvoModel
+from optimized_binary import EvoBinarizedOptimized
 
 # TODO if I continue using this, make sure to acknowledge the reddit thread I got it from
 
 configs = []
-    
-#same_batchs=[True, False, True, False, True, False, True, False]
-same_batchs=[True]
-#lrs = [2.7E-2, 2.7e-3]
-lrs = [2.7e-2]
-mate_multipliers=[8]
-population_sizes = [1024]
-#population_sizes = [256]
-#num_parents_for_matings = [4,16,64]
-num_parents_for_matings = [64]
-batch_sizes = [500] 
-hidden_sizes=[128]
-max_generation = 30000*4
-#max_generation = 200
 target_acc = 0.99
+    
+##same_batchs=[True, False, True, False, True, False, True, False]
+same_batchs=[True]
+##lrs = [2.7E-2, 2.7e-3]
+#lrs = [2.7e-2]
+mate_multipliers=[-1]
+#population_sizes = [4]
+##population_sizes = [256]
+##num_parents_for_matings = [4,16,64]
+#num_parents_for_matings = [64]
+#batch_sizes = [500] 
+#hidden_sizes=[128]
+#max_generation = 30000*4
+##max_generation = 200
+##prefix = 'test'
 #prefix = 'test'
-prefix = 'test'
-fitness_weights = True
-fitness_types = ['sampled_acc'] # 'cross_entropy','accuracy','sampled_acc'
-model_type = 'EvoModel'
-load_from = 'saves/copy/min_july22_hyperparam_search3_hs128_sbTrue_lr0.027_mm8_bs500_ps1024_mn256_rs5096758358.pt' # 93.5 val acc
-elite=False
+#fitness_weights = True
+#fitness_types = ['sampled_acc'] # 'cross_entropy','accuracy','sampled_acc'
+#model_type = 'EvoModel'
+#load_from = 'saves/copy/min_july22_hyperparam_search3_hs128_sbTrue_lr0.027_mm8_bs500_ps1024_mn256_rs5096758358.pt' # 93.5 val acc
+#elite=False
 
 
 
@@ -48,40 +50,36 @@ elite=False
 # 5e-8 expects 2, not much point going any lower than this
 # seems like 3e-8 actually works the best. 
 lrs = [-1]
+# Note that if elite = True, population_size needs to be more than 1
 population_sizes = [16]
 num_parents_for_matings = ['all']
 batch_sizes = ['all']
 #batch_sizes = [500]
-minibatch_size = 500
-hidden_sizes=[4096] 
-prefix = 'binary_bnorm1-1_aug15'
+minibatch_size = 256
+hidden_sizes=[64] 
 fitness_weights=False
 fitness_types = ['cross_entropy'] # 'cross_entropy','accuracy','sampled_acc'
 #load_from = 'saves/copy/min_binary_oneflip_all_aug13_2_hs4096_sbTrue_lr-1_mm8_bsall_ps16_mn1_rs6723654141_dcuda.pt'
 #load_from = 'saves/copy/min_binary_oneflip_all_aug13_1_hs4096_sbTrue_lr-1_mm8_bsall_ps16_mn1_rs2282136183_dcuda.pt'
-#load_from=''
+load_from=''
 #load_from = 'saves/copy/min_binary_oneflip_mate_all_aug14_hs4096_sbTrue_lr-1_mm8_bs500_ps16_npall_rs4534314016_dmps_batch_norm.pt'
-load_from = 'saves/copy/min_binary_bnorm1_aug15_hs4096_sbTrue_lr-1_mm8_bsall_ps16_npall_rs6712504267_dcuda_batch_norm.pt'
-model_type = 'EvoBinarized'
+#load_from = 'saves/copy/min_binary_bnorm1_aug15_hs4096_sbTrue_lr-1_mm8_bsall_ps16_npall_rs6712504267_dcuda_batch_norm.pt'
 elite=True
-layers=2
+layers=1
 max_generation = 2000
 #activation='batch_norm'
-activation='batch_norm'
+activation='const'
+
+prefix = 'optimized_test1'
+model_type = 'EvoBinarizedOptimized'
+
+#prefix = 'nonoptimized_test1'
+#model_type = 'EvoBinarized'
 
 
-#load_from = 'saves/copy/min_sampled_july17_1_hs128_sbTrue_lr0.027_mm8_bs500_ps256_mn64_rs3592498957.pt'
 #load_from = 'saves/copy/min_july22_hyperparam_search3_hs128_sbTrue_lr0.027_mm8_bs500_ps1024_mn256_rs5096758358.pt' # 93.5 val acc
 
 #fitness_types = ['cross_entropy'] # 'cross_entropy','accuracy','sampled_acc'
-
-#prefix = 'colab1'
-#same_batchs=[True]
-#mate_multipliers=[4]
-#batch_sizes = [32]
-#population_sizes = [64]
-#num_parents_for_matings = [4]
-
 
 val_batch_size = 500
 device = 'cuda' if torch.cuda.is_available() else 'mps'
@@ -90,7 +88,7 @@ device = 'cuda' if torch.cuda.is_available() else 'mps'
 eval_every_time = 300 # evaluation is done at specific time intervals, so it doesn't affect
                      # the time-based comparison between different hyperparams. In seconds.
 
-#eval_every_time=5
+eval_every_time=5
 save_every_time=600
 
 
@@ -132,7 +130,7 @@ for sb, lr, mm, ps, parents, bs, hs, ft  in product(same_batchs, lrs, mate_multi
 
 
 
-@torch.inference_mode()
+#@torch.inference_mode()
 def evaluate(model: nn.Module, val_loader, verbose=True):
     t1 = time.time()
     model.eval()
@@ -141,8 +139,13 @@ def evaluate(model: nn.Module, val_loader, verbose=True):
     correct = 0
     for input, target in val_loader:
         input, target = input.to(device), target.to(device)
-        #print('input.shape:', input.shape)
-        #print('target.shape:', target.shape)
+        if len(input.shape) == 4:
+          input=input.squeeze() # remove channel dimension
+
+        # add population dimension
+        input = input.unsqueeze(0)
+
+
         output = model.forward([input])
         if type(output) is list:
             output = output[0]
@@ -156,88 +159,14 @@ def evaluate(model: nn.Module, val_loader, verbose=True):
         #print('probs: ', probs[0])
         pred = output.argmax(dim=-1, keepdim=True) 
         correct += pred.eq(target.view_as(pred)).sum().item() 
-        total += input.size(0)
+        total += target.size(0)
+        if total >= 10000: break
     if verbose: print(f"Eval time: {time.time() -t1}")
 
     return loss / total, correct / total
 
 
 
-class EvoLinear(nn.Module):
-    def __init__(self, in_features: int, out_features: int, improvement=False, mate_multiplier=8) -> None:
-        """ 
-        "improvement" arg means that we are going to be keeping track of last generation's
-        weights, and whenever we forward throug the layer we also forward through the previous
-        weights, so that we can then eventually compute the difference in fitness between 
-        the current weights and the previous weights.
-        """
-       
-        super().__init__()
-        self.weight: torch.Tensor
-        # TODO should we initialize differently here?
-        self.register_buffer('weight', torch.zeros(out_features, in_features))
-        self.mate_multiplier = mate_multiplier
-        
-
-    def next_generation(self, population_size: int, lr: float):
-        out_features, in_features = self.weight.size()
-        mean = self.weight.expand(population_size, out_features, in_features) 
-        self.offspring = torch.normal(mean, std=lr) 
-
-    def mate(self, parents: list[int], fitness_weights=None):
-        if fitness_weights is None:
-            adjustment = self.offspring[parents, :, :].mean(0, keepdim=False)  - self.weight
-            self.weight = self.weight + self.mate_multiplier * adjustment
-            #print(f'adj norm for {self.weight.shape}:', torch.norm(adjustment))
-        else:
-            # This seems mostly unnecessary, rarely ever happens after first generation.
-            fitness_weights = (fitness_weights > 0) * fitness_weights 
-            # TODO update this hyperparam, 10 seems best so far (3 diverges)
-            fitness_weights = torch.nn.functional.normalize(fitness_weights, dim=None)  / 10
-            adjustment  = ((self.offspring[parents, ...] - self.weight[None,...])*fitness_weights[:,None,None]).sum(0, keepdim=False)
-
-            #print(f'adj norm for {self.weight.shape}:', torch.norm(adjustment))
-            self.weight = self.weight + self.mate_multiplier * adjustment
-
-    def reset(self):
-        self.offspring = None
-
-    def forward(self, x):
-        #print('x:', type(x))
-        #print(tuple(_.shape for _ in x))
-            
-        original_results =  F.linear(x[0], self.weight)
-        if self.offspring is not None and len(x) > 1:
-            mutation_results =  torch.einsum('pbi,poi->pbo', x[1], self.offspring)
-            return [original_results, mutation_results]
-        return [original_results]
-
-
-
-class EvoModel(nn.Module):
-    def __init__(self, hidden_size, mate_multiplier):
-        super().__init__()
-        self.fc1 = EvoLinear(28 * 28, hidden_size, mate_multiplier=mate_multiplier)
-        self.fc2 = EvoLinear(hidden_size, 10, mate_multiplier=mate_multiplier)
-
-    def forward(self, x):
-        x = self.fc1.forward([_.flatten(2) for _ in x])
-        return self.fc2.forward([F.relu(_) for _ in x])  
-
-    def next_generation(self, population_size: int, lr: float):
-        for m in self.modules():
-            if isinstance(m, EvoLinear):
-                m.next_generation(population_size, lr)
-
-    def mate(self, parents: list[int], fitness_weights=None):
-        for m in self.modules():
-            if isinstance(m, EvoLinear):
-                m.mate(parents, fitness_weights)
-
-    def reset(self):
-        for m in self.modules():
-            if isinstance(m, EvoLinear):
-                m.reset()
 
 
 def upload_to_aws(experiment_name):
@@ -264,15 +193,22 @@ def compute_loss(original_output, mutation_output, target, config):
         improvements = mutation_correct.float() - original_correct.float()
     
     elif config['fitness_type'] == 'cross_entropy':
+        #print("Original output shape:", original_output.shape)
+        #print("Mutation  output shape:", mutation_output.shape)
+
         original_loss = F.cross_entropy(original_output.flatten(0, 1), target.flatten(0,1), reduction='none') 
         mutation_loss = F.cross_entropy(mutation_output.flatten(0, 1), target.flatten(0,1), reduction='none') 
+        #print("Mutation output:", mutation_output.shape, mutation_output)
 
         original_loss = original_loss.unflatten(0, (population_size, batch_size)).mean(dim=-1) 
         mutation_loss = mutation_loss.unflatten(0, (population_size, batch_size)).mean(dim=-1) 
+        #print("Mutation loss:", mutation_output.shape, mutation_output)
         ave_fitness = -1 * mutation_loss.mean().item()
     
     
-        if model_type == 'EvoBinarized':
+        if model_type == 'EvoBinarized'  or model_type == 'EvoBinarizedOptimized':
+            #print("ML:", mutation_loss)
+            #print("ML[0]:", mutation_loss[0])
             improvements = - mutation_loss + mutation_loss[0] 
         else:
             improvements = original_loss - mutation_loss
@@ -294,7 +230,7 @@ def compute_loss(original_output, mutation_output, target, config):
 
 
 
-@torch.inference_mode()
+#@torch.inference_mode()
 def main(config):
     
     # this slows things down when cpus are limited
@@ -338,19 +274,26 @@ def main(config):
         transforms.ToTensor(),
     ])
     
-    train = datasets.MNIST('./data/mnist', train=True, download=False, transform=transform)
-    val = datasets.MNIST('./data/mnist', train=False, transform=transform)
+    #train = datasets.MNIST('./data/mnist', train=True, download=False, transform=transform)
     
     # This complicated loader might not be necessary? 
     # works fine with only one worker and two workers doesn't seem to speed anything up
     #train_loader = SyncMPD(population_size, batch_size, device, same_batch) 
 
-    train_loader = MPD(population_size, batch_size, 1, 2, device, same_batch) 
+    if model_type == 'EvoBinarizedOptimized':
+      train_loader = BinarizedMnistDataloader(device, train=True)
+      val_loader = BinarizedMnistDataloader(device, train=False)
+      assert batch_size == 'all'
+    else:
+      train_loader = MPD(population_size, batch_size, 1, 2, device, same_batch) 
+      val = datasets.MNIST('./data/mnist', train=False, transform=transform)
+      val_loader = torch.utils.data.DataLoader(val, val_batch_size, shuffle=False, pin_memory=False)
+
     #train_loader = torch.utils.data.DataLoader(train, batch_size=batch_size, num_workers=8, persistent_workers=True, shuffle=True, pin_memory=True, drop_last=True)
     print("initialization data")
     t1 = time.time()
     print(f"done in {time.time() - t1}")
-    val_loader = torch.utils.data.DataLoader(val, val_batch_size, shuffle=False, pin_memory=False)
+
 
     if not config['load_from']:
         if model_type == 'EvoModel':
@@ -358,6 +301,9 @@ def main(config):
             model = model.to(device)
         elif model_type == 'EvoBinarized':
             model = EvoBinarizedMnistModel(hidden_size=hidden_size, elite=config['elite'], layers=config['layers'], activation=activation)
+            model = model.to(device)
+        elif model_type == 'EvoBinarizedOptimized':
+            model = EvoBinarizedOptimized(hidden_size=hidden_size, elite=config['elite'], layers=config['layers'], activation=activation)
             model = model.to(device)
         else:
             assert False
@@ -386,6 +332,7 @@ def main(config):
     while not done:
         for input, target in train_loader:
             model.next_generation(population_size, lr)
+            #asdfjk
 
             input, target = input.to(device), target.to(device)
 
@@ -407,17 +354,17 @@ def main(config):
                     input = input.unsqueeze(0).expand((population_size, *input.shape))
                     target = target.unsqueeze(0).expand((population_size, *target.shape))
 
-                    #print('input[0,0] == input[0,1]:', input[0,0] == input[0,1]) # these are not equiv
-                    #print('input[0,0] == input[0,2]:', input[0,0] == input[0,2])
-
-                    
                     r = model.forward([input,input])
+                    #print("Output of model shape:", r.shape)
+                    #print("Output of model:", r)
                     if type(r) is tuple or type(r) is list:
                         original_output, mutation_output = r
                     else:
                         original_output, mutation_output = r.float(), r.float()
+                    #print("mutation output after convert to float:", mutation_output)
 
                     improvements_mb, ave_fitness = compute_loss(original_output, mutation_output, target, config)
+                    #print("Improvements_mb:", improvements_mb)
                     improvements += improvements_mb
                     ave_fitness += ave_fitness / num_minibatches
                     #print(improvements)
@@ -454,6 +401,8 @@ def main(config):
                 parents = (improvements > 0).nonzero().squeeze(dim=1).cpu()
             else:
                 parents = torch.topk(improvements, k=num_parents_for_mating, largest=True).indices.tolist() 
+            #print("Improvements: ", improvements)
+            #print("Parents:", parents)
 
             if config['fitness_weights']:
                 #num_parents_for_mating also serves to indicate what type of mating to do

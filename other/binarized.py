@@ -71,7 +71,7 @@ class EvoBinarizedLayer(nn.Module):
 
 
 
-    def mate(self, parents: list[int], num_parents_for_mating, fitness_weights=None):
+    def mate(self, parents, num_parents_for_mating, fitness_weights=None):
         # TODO add back in fitness weights
         # TODO add back in some kind of averaging? 
         # can't do the below, for small learning rates it will never change
@@ -81,8 +81,10 @@ class EvoBinarizedLayer(nn.Module):
         if type(parents) == list and len(parents) == 0: return
 
         if num_parents_for_mating == 'all':
+            #  these are the indices of the bits that have been flipped
             i0,i1,i2,i3 = self.indices
 
+            # take only the bits that have been flipped for the set of parents
             i0 = i0[parents]
             #i1 = i1[parents]
             i2 = i2[parents]
@@ -107,6 +109,8 @@ class EvoBinarizedLayer(nn.Module):
         if self.offspring is None:
             #x = torch.logical_and(x, self.w)
 
+            #print(' xshape:', x.shape)
+            #print(' self.w.shape:', self.w.shape)
             x = torch.einsum('pbi,pbio->pbo',x,self.w[0])
             x += torch.einsum('pbi,pbio->pbo',notx,self.w[1])
 
@@ -157,7 +161,7 @@ class EvoBinarizedMnistModel(nn.Module):
         self.output_size = output_size
         self.activation = activation
         
-        self.layers = nn.ParameterList([])
+        self.layers = nn.ModuleList([])
         self.layers.append(EvoBinarizedLayer(in_features=input_size, out_features=hidden_size, elite=elite, activation=activation))
         for _ in range(layers-1):
             self.layers.append(EvoBinarizedLayer(in_features=hidden_size, out_features=hidden_size, elite=elite, activation=activation))
@@ -172,8 +176,12 @@ class EvoBinarizedMnistModel(nn.Module):
         else:
             x = image
 
+        #print('image x shape:', x.shape)
+
         x = x > 0.5 # convert input to binary
+
         x = x.view((*x.shape[:-2], -1)) # flatten
+        #print("x shape after view:", x.shape)
 
         for i,layer in enumerate(self.layers):
             input_size = x.shape[2]
@@ -188,7 +196,7 @@ class EvoBinarizedMnistModel(nn.Module):
             if isinstance(m, EvoBinarizedLayer):
                 m.next_generation(population_size, lr)
 
-    def mate(self, parents: list[int], **kwargs):
+    def mate(self, parents, **kwargs):
         for m in self.modules():
             if isinstance(m, EvoBinarizedLayer):
                 m.mate(parents, **kwargs)

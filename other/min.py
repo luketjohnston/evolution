@@ -18,6 +18,8 @@ from binarized import EvoBinarizedMnistModel
 from evo import EvoModel
 from optimized_binary import EvoBinarizedOptimized
 
+from torch.profiler import profile, record_function, ProfilerActivity
+
 # TODO if I continue using this, make sure to acknowledge the reddit thread I got it from
 
 configs = []
@@ -71,7 +73,7 @@ fitness_types = ['cross_entropy'] # 'cross_entropy','accuracy','sampled_acc'
 #load_from = 'saves/copy/min_binary_oneflip_all_aug13_2_hs4096_sbTrue_lr-1_mm8_bsall_ps16_mn1_rs6723654141_dcuda.pt'
 #load_from = 'saves/copy/min_binary_oneflip_all_aug13_1_hs4096_sbTrue_lr-1_mm8_bsall_ps16_mn1_rs2282136183_dcuda.pt'
 load_from=''
-#load_from = 'saves/copy/min_binary_oneflip_mate_all_aug14_hs4096_sbTrue_lr-1_mm8_bs500_ps16_npall_rs4534314016_dmps_batch_norm.pt'
+#load_from = 'saves/min_optimized_test1.1_hs4096_sbTrue_lr-1_mm-1_bsall_ps16_np1_rs4414047074_dcuda_const.pt'
 #load_from = 'saves/copy/min_binary_bnorm1_aug15_hs4096_sbTrue_lr-1_mm8_bsall_ps16_npall_rs6712504267_dcuda_batch_norm.pt'
 elite=True
 layers=2
@@ -79,7 +81,7 @@ max_generation = 200000000
 #activation='batch_norm'
 activation='const'
 
-prefix = 'optimized_test0'
+prefix = 'optimized_test1.2'
 model_type = 'EvoBinarizedOptimized'
 
 #prefix = 'nonoptimized_test1'
@@ -123,7 +125,7 @@ for sb, lr, mm, ps, parents, bs, hs, ft  in product(same_batchs, lrs, mate_multi
         'num_parents_for_mating': parents,
         'batch_size': bs,
         'hidden_size': hs,
-        'device':'device',
+        'device':device,
         'val_batch_size': val_batch_size,
         'random_seed': random_seed,
         'max_generation': max_generation,
@@ -137,6 +139,12 @@ for sb, lr, mm, ps, parents, bs, hs, ft  in product(same_batchs, lrs, mate_multi
         'minibatch_size': minibatch_size,
         })
 
+
+# For profiling
+def trace_handler(p):
+    output = p.key_averages().table(sort_by="self_cuda_time_total", row_limit=10)
+    print(output)
+    p.export_chrome_trace("/tmp/trace_" + str(p.step_num) + ".json")
 
 
 #@torch.inference_mode()
@@ -156,7 +164,6 @@ def evaluate(model: nn.Module, val_loader, verbose=True):
 
 
         output = model.forward([input])
-        torch.cuda.synchronize()
         if type(output) is list:
             output = output[0]
         output = output.squeeze()
@@ -343,118 +350,130 @@ def main(config):
     last_eval = start
     last_save = start
     last_eval_generation = 0
+
+
+    with profile(
+           activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+           schedule=torch.profiler.schedule(
+               wait=3,
+               warmup=2,
+               active=3),
+           profile_memory=True,
+           on_trace_ready=trace_handler
+           ) as p:
     
-    done = False
-    while not done:
-        for input, target in train_loader:
-            model.next_generation(population_size, lr)
-            input, target = input.to(device), target.to(device)
+        done = False
+        while not done:
+            for input, target in train_loader:
+                model.next_generation(population_size, lr)
+                input, target = input.to(device), target.to(device)
 
-        
-            #if not batch_size == 'all':
-            if True:
-                #input = input.view((population_size, batch_size, *input.shape[1:]))
-                #target = target.view((population_size, batch_size, *target.shape[1:]))
+            
+                #if not batch_size == 'all':
+                if True:
+                    #input = input.view((population_size, batch_size, *input.shape[1:]))
+                    #target = target.view((population_size, batch_size, *target.shape[1:]))
 
-                minibatch_x = torch.split(input, config['minibatch_size'], dim=0)
-                minibatch_y = torch.split(target, config['minibatch_size'], dim=0)
-                num_minibatches = len(minibatch_x)
-
-
-                improvements = torch.zeros(population_size, device=device)
-                ave_fitness = 0
-
-                for input, target in zip(minibatch_x, minibatch_y):
-                    input = input.unsqueeze(0).expand((population_size, *input.shape))
-                    target = target.unsqueeze(0).expand((population_size, *target.shape))
-
-                    r = model.forward([input,input])
-                    torch.cuda.synchronize()
-                    #print("Output of model shape:", r.shape)
-                    #print("Output of model:", r)
-                    if type(r) is tuple or type(r) is list:
-                        original_output, mutation_output = r
-                    else:
-                        original_output, mutation_output = r.float(), r.float()
-                    #print("mutation output after convert to float:", mutation_output)
-
-                    improvements_mb, ave_fitness = compute_loss(original_output, mutation_output, target, config)
-                    #print("Improvements_mb:", improvements_mb)
-                    improvements += improvements_mb
-                    ave_fitness += ave_fitness / num_minibatches
-                    #print(improvements)
+                    minibatch_x = torch.split(input, config['minibatch_size'], dim=0)
+                    minibatch_y = torch.split(target, config['minibatch_size'], dim=0)
+                    num_minibatches = len(minibatch_x)
 
 
-                #assert(torch.sum(mutation_output[0,0] == mutation_output[0,1])  < mutation_output[0,1].shape[0])
-                #print('mutation_output[0,0] == mutation_output[0,2]:', mutation_output[0,0] == mutation_output[0,2])
+                    improvements = torch.zeros(population_size, device=device)
+                    ave_fitness = 0
+
+                    for input, target in zip(minibatch_x, minibatch_y):
+                        input = input.unsqueeze(0).expand((population_size, *input.shape))
+                        target = target.unsqueeze(0).expand((population_size, *target.shape))
+
+                        r = model.forward([input,input])
+                        #print("Output of model shape:", r.shape)
+                        #print("Output of model:", r)
+                        if type(r) is tuple or type(r) is list:
+                            original_output, mutation_output = r
+                        else:
+                            original_output, mutation_output = r.float(), r.float()
+                        #print("mutation output after convert to float:", mutation_output)
+
+                        improvements_mb, ave_fitness = compute_loss(original_output, mutation_output, target, config)
+                        #print("Improvements_mb:", improvements_mb)
+                        improvements += improvements_mb
+                        ave_fitness += ave_fitness / num_minibatches
+                        #print(improvements)
+
+
+                    #assert(torch.sum(mutation_output[0,0] == mutation_output[0,1])  < mutation_output[0,1].shape[0])
+                    #print('mutation_output[0,0] == mutation_output[0,2]:', mutation_output[0,0] == mutation_output[0,2])
 
 
 
-            #else:
-            #    input = input.unsqueeze(0).expand((population_size, *input.shape))
-            #    target = target.unsqueeze(0).expand((population_size, *target.shape))
-            #    original_outputs = []
-            #    mutation_outputs = []
-            #    #for input, target in zip(torch.split(input, 500, dim=1), torch.split(target, 500, dim=1)):
-            #    assert False
-            #    for input in torch.split(input, 500, dim=1):
-            #        original_output, mutation_output = model.forward([input,input])
-            #        original_outputs.append(original_output)
-            #        mutation_outputs.append(mutation_output)
-            #    original_output = torch.concat(original_outputs,dim=1)
-            #    mutation_output = torch.concat(mutation_outputs,dim=1)
-        
+                #else:
+                #    input = input.unsqueeze(0).expand((population_size, *input.shape))
+                #    target = target.unsqueeze(0).expand((population_size, *target.shape))
+                #    original_outputs = []
+                #    mutation_outputs = []
+                #    #for input, target in zip(torch.split(input, 500, dim=1), torch.split(target, 500, dim=1)):
+                #    assert False
+                #    for input in torch.split(input, 500, dim=1):
+                #        original_output, mutation_output = model.forward([input,input])
+                #        original_outputs.append(original_output)
+                #        mutation_outputs.append(mutation_output)
+                #    original_output = torch.concat(original_outputs,dim=1)
+                #    mutation_output = torch.concat(mutation_outputs,dim=1)
+            
 
-            generation_count += 1
-            #print(generation_count)
-        
-
-
-            writer.add_scalar('ave_fitness', ave_fitness, generation_count)
-
-            if num_parents_for_mating == 'all':
-                parents = (improvements > 0).nonzero().squeeze(dim=1).cpu()
-            else:
-                parents = torch.topk(improvements, k=num_parents_for_mating, largest=True).indices.tolist() 
-            #print("Improvements: ", improvements)
-            #print("Parents:", parents)
-
-            if config['fitness_weights']:
-                #num_parents_for_mating also serves to indicate what type of mating to do
-                model.mate(parents, num_parents_for_mating=num_parents_for_mating, fitness_weights=improvement[parents])
-            else:
-                model.mate(parents, num_parents_for_mating=num_parents_for_mating)
+                generation_count += 1
+                #print(generation_count)
+            
 
 
-            if (time.time() > last_eval + eval_every_time) or (generation_count > config['max_generation']):
-                last_eval = time.time()
-                dt = time.time() - t0
+                writer.add_scalar('ave_fitness', ave_fitness, generation_count)
 
-                model.reset()
-                loss, accuracy = evaluate(model, val_loader)
+                if num_parents_for_mating == 'all':
+                    parents = (improvements > 0).nonzero().squeeze(dim=1).cpu()
+                else:
+                    parents = torch.topk(improvements, k=num_parents_for_mating, largest=True).indices.tolist() 
+                #print("Improvements: ", improvements)
+                #print("Parents:", parents)
 
-                writer.add_scalar('best_val_loss', loss, generation_count)
-                writer.add_scalar('best_val_acc', accuracy, generation_count)
-                writer.add_scalar('best_val_acc_time', accuracy, time.time() - start)
-                print(f'gen {generation_count} | loss: {loss:.4f} | accuracy: {accuracy:.2%} | elapsed time {time.time() - start:.1f} | seconds per generation: {dt/(generation_count - last_eval_generation):.3f}')
-                last_eval_generation = generation_count
+                if config['fitness_weights']:
+                    #num_parents_for_mating also serves to indicate what type of mating to do
+                    model.mate(parents, num_parents_for_mating=num_parents_for_mating, fitness_weights=improvement[parents])
+                else:
+                    model.mate(parents, num_parents_for_mating=num_parents_for_mating)
 
-                if time.time() > last_save + save_every_time:
+
+                if (time.time() > last_eval + eval_every_time) or (generation_count > config['max_generation']):
+                    last_eval = time.time()
+                    dt = time.time() - t0
+
+                    model.reset()
+                    loss, accuracy = evaluate(model, val_loader)
+
+                    writer.add_scalar('best_val_loss', loss, generation_count)
+                    writer.add_scalar('best_val_acc', accuracy, generation_count)
+                    writer.add_scalar('best_val_acc_time', accuracy, time.time() - start)
+                    print(f'gen {generation_count} | loss: {loss:.4f} | accuracy: {accuracy:.2%} | elapsed time {time.time() - start:.1f} | seconds per generation: {dt/(generation_count - last_eval_generation):.3f}')
+                    last_eval_generation = generation_count
+
+                    if time.time() > last_save + save_every_time:
+                        save_model(model.cpu(), config, experiment_name, verbose=True)
+                        last_save = time.time()
+                        model.to(device)
+
+                    if generation_count > config['max_generation'] or accuracy > config['target_acc']:
+                        done=True
+                        break
+                    t0 = time.time()
+
+                if generation_count % upload_every == 0:
+                    model.reset()
                     save_model(model.cpu(), config, experiment_name, verbose=True)
-                    last_save = time.time()
                     model.to(device)
+                    print("Uploading to aws...")
+                    upload_to_aws(experiment_name)
 
-                if generation_count > config['max_generation'] or accuracy > config['target_acc']:
-                    done=True
-                    break
-                t0 = time.time()
-
-            if generation_count % upload_every == 0:
-                model.reset()
-                save_model(model.cpu(), config, experiment_name, verbose=True)
-                model.to(device)
-                print("Uploading to aws...")
-                upload_to_aws(experiment_name)
+                p.step()
     upload_to_aws(experiment_name)
 
 

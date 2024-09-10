@@ -16,6 +16,7 @@
 #define  torch_output_inttype torch::kInt32
 
 const bool COMPARE_WITH_CPU{true};
+const bool STRESS_TEST{false};
 const unsigned int BATCH_SIZE{21}; // TODO should we make threads be max of batch_size and 32?
 const unsigned int POPULATION_SIZE{1};
 // IN_SIZE must be large enough for a full warp to load integers into memory.
@@ -154,6 +155,7 @@ int main( int argc, char *argv[] )
   fprintf(stdout, "Population size is %d\n",population_size);
   fprintf(stdout, "sizeof(int)%lu\n",sizeof(int));
   fprintf(stdout, "sizeof(device_inttype)%lu\n",sizeof(device_inttype));
+  std::cout << "Verbose is: " << verbose << std::endl;
 
   auto options =
       torch::TensorOptions()
@@ -188,6 +190,45 @@ int main( int argc, char *argv[] )
   // GPU //
   /////////
 
+  if (STRESS_TEST) {
+    at::Tensor i1;
+    at::Tensor w1;
+    at::Tensor w2;
+    at::Tensor i2;
+    at::Tensor r;
+ 
+    for (int i = 0; i < 5000; i++) {
+      auto options =
+          torch::TensorOptions()
+            .dtype(torch_device_inttype)
+            .layout(torch::kStrided)
+            .device(torch::kCUDA)
+            .requires_grad(false);
+      i1 = torch::randint(minlong,maxlong,{1024,4096,13},options);
+      w1 = torch::randint(minlong,maxlong,{2,1024,13,128},options);
+
+      i2 = binary_forward::binary_forward_cuda(
+          i1,
+          w1,
+          (13*64)/2,
+          false);
+
+      w2 = torch::randint(minlong,maxlong,{2,1024,2,10},options);
+
+      r = binary_forward::binary_forward_cuda(
+          i2,
+          w2,
+          0,
+          false);
+      printOut(r.index({torch::indexing::Slice(-1,torch::indexing::None),torch::indexing::Slice(-1,torch::indexing::None),torch::indexing::Slice()}), false);
+      std::cout << i << std::endl;
+    }
+  }
+
+
+
+       
+
   checkCUDA( cudaEventRecord( start, 0 ) );
 
   at::Tensor d_out_thresh = binary_forward::binary_forward_cuda(
@@ -215,6 +256,17 @@ int main( int argc, char *argv[] )
     (double) OUT_SIZE * (double) IN_SIZE * 2.0 / 
     ( (double) elapsedTime / 1000.0 ) * 1.e-9 ))); // TODO check this computation , havent checked
 
+  if (verbose) {
+    std::cout << "Input:" << std::endl;
+    printInput(h_input);
+    //printf("Device weight:\n");
+    //printWeight(d_weight.to(torch::kCPU));
+    std::cout << "Device out:" << std::endl;
+    printOut(d_out_thresh.to(torch::kCPU), true);
+    std::cout << "Device NOTHRESH out:" << std::endl;
+    printOut(d_out_nothresh.to(torch::kCPU), false);
+  }
+
   if (COMPARE_WITH_CPU) {
     // start timer
     checkCUDA( cudaEventRecord( start, 0 ) );
@@ -241,22 +293,15 @@ int main( int argc, char *argv[] )
     device_inttype diff2 = torch::sum(torch::abs(h_out_nothresh - d_out_nothresh.to(torch::kCPU))).item<device_inttype>();
 
     if (verbose) {
-      std::cout << "Input:" << std::endl;
-      printInput(h_input);
 
       //printf("Weight:\n");
       //printWeight(h_weight);
-      //printf("Device weight:\n");
-      //printWeight(d_weight.to(torch::kCPU));
       std::cout << "Host out:" << std::endl << h_out_thresh << std::endl;
       printOut(h_out_thresh, true);
-      std::cout << "Device out:" << std::endl << d_out_thresh.to(torch::kCPU) << std::endl;
-      printOut(d_out_thresh.to(torch::kCPU), true);
       std::cout << "NOTHRESH Host out:" << std::endl;
       printOut(h_out_nothresh, false);
-      std::cout << "Device NOTHRESH out:" << std::endl;
-      printOut(d_out_nothresh.to(torch::kCPU), false);
     }
+
 
     
     printf("Threshold error is %ld\n",diff1);
@@ -267,6 +312,7 @@ int main( int argc, char *argv[] )
 
 
   }
+
 
     
 

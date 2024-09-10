@@ -36,9 +36,9 @@ This means that each of the 32 warps must compute popcount(w * input)
 
 
 // note that i is the index into the input as an array of integers, NOT as an array of bits.
-__host__ __device__ intType_t i_ind(const intType_t b, const intType_t p, const intType_t i, const device_inttype population_size, const device_inttype in_ints) {
+__host__ __device__ intType_t i_ind(const intType_t p, const intType_t b, const intType_t i, const device_inttype batch_size, const device_inttype in_ints) {
  
-  return b * population_size * in_ints + p * in_ints + i;
+  return p * batch_size * in_ints + b * in_ints + i;
 }
 
 // note that o is the index into output as an array of integers, NOT as an array of bits.
@@ -82,15 +82,15 @@ void host_op(
         output_inttype temp = 0;
 
         for( intType_t i = 0; i < in_ints; i++) {
-          temp += __builtin_popcountll( (input[i_ind(b,p,i,population_size,in_ints)] & weight[w_ind(0,p,i,o,population_size,in_ints,out_size)]));
-          temp += __builtin_popcountll((~input[i_ind(b,p,i,population_size,in_ints)]) & weight[w_ind(1,p,i,o,population_size,in_ints,out_size)]);
+          temp += __builtin_popcountll( (input[i_ind(p,b,i,batch_size,in_ints)] & weight[w_ind(0,p,i,o,population_size,in_ints,out_size)]));
+          temp += __builtin_popcountll((~input[i_ind(p,b,i,batch_size,in_ints)]) & weight[w_ind(1,p,i,o,population_size,in_ints,out_size)]);
         }
         // NOTE that the way we shift here, the outputs are ordered low-precision bits first
        
         if (thresh > 0) {
           device_inttype bit_to_set = (temp >= thresh) << (o % (OUTPUT_INTTYPE_BITS));
           device_inttype o_int_index = o / (OUTPUT_INTTYPE_BITS);
-          //if (VERBOSE && b == 1) {printf("Setting output o: %u o_int_index: %u to bit_to_set: %u\n", o, o_int_index, bit_to_set); };
+          //if (verbose && b == 1) {printf("Setting output o: %u o_int_index: %u to bit_to_set: %u\n", o, o_int_index, bit_to_set); };
           out[o_ind(p,b,o_int_index,batch_size,out_int32s)] = out[o_ind(p,b,o_int_index,batch_size,out_int32s)] | bit_to_set;
         } else {
           //if (verbose) {printf("Setting output b: %u o: %u temp: %d\n", b, o, temp); };
@@ -190,7 +190,7 @@ __global__ void binary_forward(
     // Load input into shared memory
     //if (threadIdx.x < warp_size) { 
     if (threadIdx.x < warp_size && b < batch_size && i < in_ints) { 
-      input_tile[threadIdx.y * warp_size + threadIdx.x] = input[i_ind(b, p, i, population_size, in_ints)]; 
+      input_tile[threadIdx.y * warp_size + threadIdx.x] = input[i_ind(p,b, i, batch_size, in_ints)]; 
     }
     //if (true) {
     // load weight into shared memory
@@ -278,7 +278,7 @@ __global__ void binary_forward_with_threshold(
     //if (threadIdx.x < warp_size) { 
     if (threadIdx.x < warp_size &&  b < batch_size && i < in_ints) { 
       //if (verbose && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u setting input\n", threadIdx.x, threadIdx.y);};
-      input_tile[threadIdx.y * warp_size + threadIdx.x] = input[i_ind(b, p, i, population_size, in_ints)]; 
+      input_tile[threadIdx.y * warp_size + threadIdx.x] = input[i_ind(p, b, i, batch_size, in_ints)]; 
     }
 
     //if (true) {

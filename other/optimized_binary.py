@@ -26,15 +26,12 @@ class EvoBinarizedLayerOptimized(nn.Module):
 
         # the first dimension is for whether this w acts on x, or on ~x
         w = torch.randint(low=-2**63, high=2**63-1, size=[2,1,in_ints,out_features], dtype=torch.int64)
-        #print('created w :', w)
-
-        self.running_means=None
         
         self.register_buffer('w', w)
-        #print('After init w :', w)
-        #print('After init w.cuda() :', w.cuda())
+        if activation == 'const':
+          self.thresh = self.rounded_in_features // 2 + 1 # kernel uses >= for thresholding
 
-    def next_generation(self, population_size: int, lr=-1, verbose=False):
+    def next_generation(self, population_size: int, lr=-1):
         device = self.w.device
         #print('in next generation,  self w at beginning:', self.w)
         assert lr==-1
@@ -55,63 +52,23 @@ class EvoBinarizedLayerOptimized(nn.Module):
 
         self.w = self.w[:,0:1,:,:].repeat([1, population_size,1,1])
 
-        #print('in next generation,  self w.shape before indexing:', self.w.shape)
-        #print(self.w) #works
-        #print('w[0,0,0,0]:', self.w[0,0,0,0]) # works
-        #print('w[i0[1],i1[1],i2[1],i3[1]]:', self.w[i0[1],i1[1],i2[1],i3[1]]) #
-        #print('in next generation,  self w.shape after indexing:', self.w.shape)
-        #asdfjk
-        rand_exponents = torch.randint(low=0,high=63,size=self.w[i0,i1,i2,i3].size(), device=self.w.device);
-        #print('in next generation,  self w after rand_exponents:', self.w)
+        rand_exponents = torch.randint(low=0,high=63,size=self.w[i0,i1,i2,i3].size(), device=self.w.device, dtype=torch.int64);
         bits_to_flip = torch.pow(2, rand_exponents)
         self.bits_to_flip = bits_to_flip
 
 
         if self.elite: 
-            #print('i0 before elite:', i0)
             i0,i1,i2,i3 = i0[1:], i1[1:], i2[1:], i3[1:]
-            #print('i0 after elite:', i0)
             bits_to_flip = bits_to_flip[1:]
 
-        #print('first self w :', self.w)
-
-
-        if verbose: print("W before mutation:")
-        if verbose: print_binarized(self.w)
-
-        if verbose: print("i0,i1,i2,i3:", i0,i1,i2,i3)
-        if verbose: print("w[i0,i1,i2,i3]:")
-        if verbose: print_binarized(self.w[i0,i1,i2,i3])
-        if verbose: print("Bits to flip:")
-        if verbose: print_binarized(bits_to_flip)
-
-        #print('bits to flip shape:', bits_to_flip.shape)
-        #print('self w shape:', self.w.shape)
-        #print('self w device:', self.w.device)
-        #print('self w :', self.w)
-        #print('self w[[0,0]] :', self.w[[0,0]])
-        #print('self w[i0,i1] :', self.w[i0,i1])
-        #print('self w[i0,i1,i2] :', self.w[i0,i1,i2])
-        #print('self w[i0,i1,i2,i3] shape:', self.w[i0,i1,i2,i3].shape)
         self.w[i0,i1,i2,i3] = torch.bitwise_xor(self.w[i0,i1,i2,i3], bits_to_flip)
-
-        if verbose: print("W after mutation:")
-        if verbose: print(self.w.shape)
-        if verbose: print_binarized(self.w)
-        #print("After next generation self.i0", self.i0)
-        #print("After next generation self.i1", self.i1)
-        #print("After next generation self.i2", self.i2)
-        #print("After next generation self.i3", self.i3)
 
 
 
     # 'mate' produces a single individual in self.w[0]
     # (which is then mutated with next_generation() to extend self.w[population_size])
     def mate(self, parents, num_parents_for_mating, fitness_weights=None):
-        # TODO add back in fitness weights
         # TODO add back in some kind of averaging? 
-        # can't do the below, for small learning rates it will never change
-        #self.w = self.offspring[parents, :, :, :].sum(axis=0,keepdim=True) > len(parents) / 2
 
         if torch.is_tensor(parents) and (parents.size() == 0): return
         if type(parents) == list and len(parents) == 0: return
@@ -140,8 +97,14 @@ class EvoBinarizedLayerOptimized(nn.Module):
             #print("self.w.shape before indexing: ", self.w.shape)
 
             self.w[i0,0,i2,i3] = torch.bitwise_xor(self.w[i0,0,i2,i3], bits_to_flip)
+        elif num_parents_for_mating == 1:
+            self.w[:,0,:,:] = self.w[:, parents[0], :, :].clone()
+            #self.w = self.w[:, parents[0]:parents[0]+1, :, :].clone()
         else:
-            self.w = self.offspring[:, parents[0]:parents[0]+1, :, :]
+            assert False
+
+        #print('w shape after mate:', self.w.shape)
+
 
 
     def reset(self):
@@ -149,19 +112,14 @@ class EvoBinarizedLayerOptimized(nn.Module):
 
     def forward(self, x):
         #print("Forwarding x with shape ", x.shape) # these look fine
-        verbose = False
+
         if self.activation == 'none':
           # when called with threshold == 0, returns the integer activations
-          if verbose: print("Weights:")
-          if verbose: print_binarized(self.w)
-          if verbose: print("forwarding:")
-          if verbose: print_binarized(x)
           r = torch.ops.binary_forward.binary_forward_cuda(x, self.w, 0, False)
-          if verbose: print("Result:")
-          if verbose: print_binarized(r)
           return r
         elif self.activation == 'const':
-          return torch.ops.binary_forward.binary_forward_cuda(x, self.w, self.rounded_in_features // 2, False)
+          r = torch.ops.binary_forward.binary_forward_cuda(x, self.w, self.thresh, True)
+          return r
         else:
           assert False
 
@@ -195,11 +153,9 @@ class EvoBinarizedOptimized(nn.Module):
         return x ** self.temperature
 
     def next_generation(self, population_size: int, lr: float):
-        verbose = False
         for m in self.modules():
             if isinstance(m, EvoBinarizedLayerOptimized):
-                m.next_generation(population_size, lr, verbose)
-                #verbose = True # TODO remove 
+                m.next_generation(population_size, lr)
 
     def mate(self, parents, **kwargs):
         for m in self.modules():

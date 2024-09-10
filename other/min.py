@@ -45,18 +45,27 @@ mate_multipliers=[-1]
 #elite=False
 
 
+# TODO for some reason we are getting "CUDA an illegal memory access was encountered"
+# when pop = 1024 and hidden_sizes = 128. If we reduce either the error disappears.
+# possibly just reaching max the gpu can handle?
+# the weird thing is when I run with the same params in the kernel directly I get no error
+# (see STRESS TEST)
+# - still happens with pop 512, hs 128 mb 4096
 
 # 5e-7 expects 20 mutations
 # 5e-8 expects 2, not much point going any lower than this
 # seems like 3e-8 actually works the best. 
 lrs = [-1]
+#lrs = [0.0001 * 0.03]
 # Note that if elite = True, population_size needs to be more than 1
 population_sizes = [16]
-num_parents_for_matings = ['all']
+#population_sizes = [1024]
+#num_parents_for_matings = ['all']
+num_parents_for_matings = [1]
 batch_sizes = ['all']
-#batch_sizes = [500]
-minibatch_size = 256
-hidden_sizes=[64] 
+# This is already at full gpu-util so no need to increase further
+minibatch_size = 4096
+hidden_sizes=[4096] 
 fitness_weights=False
 fitness_types = ['cross_entropy'] # 'cross_entropy','accuracy','sampled_acc'
 #load_from = 'saves/copy/min_binary_oneflip_all_aug13_2_hs4096_sbTrue_lr-1_mm8_bsall_ps16_mn1_rs6723654141_dcuda.pt'
@@ -65,12 +74,12 @@ load_from=''
 #load_from = 'saves/copy/min_binary_oneflip_mate_all_aug14_hs4096_sbTrue_lr-1_mm8_bs500_ps16_npall_rs4534314016_dmps_batch_norm.pt'
 #load_from = 'saves/copy/min_binary_bnorm1_aug15_hs4096_sbTrue_lr-1_mm8_bsall_ps16_npall_rs6712504267_dcuda_batch_norm.pt'
 elite=True
-layers=1
-max_generation = 2000
+layers=2
+max_generation = 200000000
 #activation='batch_norm'
 activation='const'
 
-prefix = 'optimized_test1'
+prefix = 'optimized_test0'
 model_type = 'EvoBinarizedOptimized'
 
 #prefix = 'nonoptimized_test1'
@@ -147,15 +156,22 @@ def evaluate(model: nn.Module, val_loader, verbose=True):
 
 
         output = model.forward([input])
+        torch.cuda.synchronize()
         if type(output) is list:
             output = output[0]
         output = output.squeeze()
         #print('output.shape:', output.shape)
         #print('target.shape:', target.shape)
+
+        #print('output.shape:', output.shape)
+        #print('target.shape:', target.shape)
+        #print('output:', output)
+        #print('target:', target)
+ 
         loss += F.cross_entropy(output, target, reduction='sum').item() 
 
         #print('output: ', output)
-        #probs = torch.softmax(output, dim=1)
+        probs = torch.softmax(output, dim=1)
         #print('probs: ', probs[0])
         pred = output.argmax(dim=-1, keepdim=True) 
         correct += pred.eq(target.view_as(pred)).sum().item() 
@@ -332,8 +348,6 @@ def main(config):
     while not done:
         for input, target in train_loader:
             model.next_generation(population_size, lr)
-            #asdfjk
-
             input, target = input.to(device), target.to(device)
 
         
@@ -355,6 +369,7 @@ def main(config):
                     target = target.unsqueeze(0).expand((population_size, *target.shape))
 
                     r = model.forward([input,input])
+                    torch.cuda.synchronize()
                     #print("Output of model shape:", r.shape)
                     #print("Output of model:", r)
                     if type(r) is tuple or type(r) is list:

@@ -108,7 +108,7 @@ if __name__ == '__main__':
 class BinarizedMnistDataloader():
     def __init__(self, device, train):
     
-        x, y = get_all_binarized_mnist(train)
+        x, y = get_all_binarized_mnist(train=train)
 
         self.x = torch.tensor(x).to(device)
         self.y = torch.tensor(y).to(device)
@@ -144,9 +144,16 @@ def get_all_binarized_mnist(train=False):
     ds = datasets.MNIST('./data/mnist', train=False, download=False, transform=transform)
   y = ds.targets
   x = ds.data
+
   x = x > 0.5 # convert input to binary
   x = x.view((*x.shape[:-2], -1)) # flatten
+  
+  return binarize_helper1(x),y
 
+def binarize_helper1(x):
+  batch_size = x.shape[0]
+  # assumes x is a boolean numpy array and is flattened already.
+  print("X shape before binarize helper:", x.shape)
   if not (x.shape[-1] % 64 == 0):
       x = np.pad(x, ((0,0),(0,64 - (x.shape[-1] % 64))), 'constant')
 
@@ -154,8 +161,11 @@ def get_all_binarized_mnist(train=False):
   dt = dt.newbyteorder('big')
 
   x = np.frombuffer(np.packbits(x,bitorder='big').data, dtype=dt)
-  x = np.reshape(x, (ds.data.shape[0], -1))
+  x = np.reshape(x, (batch_size, -1))
   x = x.astype(np.int64)
-  return x,y
+  print("X shape after binarize helper:", x.shape)
+  return x
+    
+    
     
     

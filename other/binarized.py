@@ -1,6 +1,9 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from optimized_binary import EvoBinarizedLayerOptimized # TODO remove
+from my_perfect_dataloader import binarize_helper1
+from test import print_binarized
 
 
 '''
@@ -24,6 +27,8 @@ class EvoBinarizedLayer(nn.Module):
         self.w: torch.Tensor
         self.elite = elite
         self.activation = activation
+        self.in_features = in_features
+        self.out_features = out_features
         # TODO add seed?
 
         # the first dimension is for whether this w acts on x, or on ~x
@@ -38,6 +43,25 @@ class EvoBinarizedLayer(nn.Module):
         self.indices = None 
 
         self.register_buffer('w', w)
+
+    # I used this for some debugging; it's not used for anything now.
+    def to_optimized(self):
+        opt = EvoBinarizedLayerOptimized(self.in_features, self.out_features, self.elite, self.activation)
+        opt.thresh = self.in_features // 2 +1
+
+        rounded_in = (self.in_features + 63) // 64
+        w = torch.zeros([2,self.offspring.shape[1],rounded_in, self.out_features], dtype=torch.int64, device=self.offspring.device)
+
+        int_offspring = self.offspring.to(torch.int64)
+        padded_offspring = torch.nn.functional.pad(int_offspring, (0,0,0,rounded_in*64-self.in_features,0,0,0,0,0,0))
+        for i in range(64):
+          w[:,:,:,:] = torch.bitwise_or(w[:,:,:,:], padded_offspring[:,:,0,i::64,:]<<(63-i))
+
+        opt.w = w
+        return opt
+
+
+
 
     def next_generation(self, population_size: int, lr: float):
 
@@ -59,7 +83,6 @@ class EvoBinarizedLayer(nn.Module):
 
             self.offspring[i0,i1,0,i2,i3] = (1.0 - og_weights)
             self.indices = (i0, i1, i2, i3)
-            
 
         else:
 
@@ -118,18 +141,55 @@ class EvoBinarizedLayer(nn.Module):
         else:
             #x = torch.logical_and(x, self.offspring)
 
+            # convert input into format that works for optimized layer
+            assert len(x.shape) == 3
+
+            ## Debugging stuff, not needed anymore
+            ## "flatten" the batch and pop dimensions
+            #opt_x = x.view((-1, x.shape[2])).cpu().to(torch.bool)
+            ## binarize input
+            #opt_x = binarize_helper1(opt_x)
+            #opt_x = torch.tensor(opt_x).to(self.w.device)
+            ## unflatten the batch and pop dimensions
+            #opt_x = opt_x.view((x.shape[0], x.shape[1], -1))
+            ## run optimized layer
+
+            ## First, we need to check that both are getting the same input.
+            #i = 0
+            #b = 0
+            #o = 0
+            #p = 1
+            #t = 0
+            #print("Input: ", x[p,b,i*64:i*64+64])
+            #print("Optimized input: ")
+            #print_binarized(opt_x[p,b,i:i+1])
+
+            #print('offpsring shape:', self.offspring.shape)
+            #torch.set_printoptions(precision=1, threshold=999999999999)
+            #print("Weight: ", self.offspring[t,p,0,i*64:i*64+64,o])
+            #print("Optimized weight: ")
+            #print_binarized(opt.w[t,p,i,o])
+
+            #opt_r = opt(opt_x)
+
             x = torch.einsum('pbi,pbio->pbo',x,self.offspring[0])
             x += torch.einsum('pbi,pbio->pbo',notx,self.offspring[1])
             # shape should now be [popsize, batch, input_size, output_size]
 
         if self.activation == 'none':
+            #print("Non-optimized result: ")
+            #print(x)
+            #print("Optimized result:")
+            #print(opt_r)
             return x
         elif self.activation == 'const':
-            #print('x before ac:', x)
-            #print('x.shape before ac:', x.shape)
             r =  torch.gt(x, self.w.shape[3] / 2).to(torchtype)
-            #print('x after ac:', r)
-            #print('x.shape after ac:', r.shape)
+            #print("Non-optimized result: ")
+            #print(r)
+            #print("Optimized result:")
+            ##opt_r = np.unpackbits(opt_r.cpu().numpy().view(np.uint8), bitorder="big").reshape((x.shape[0], x.shape[1], -1))
+            #print(opt_r.shape)
+            #print_binarized(opt_r)
             return r
 
         elif self.activation == 'batch_norm':

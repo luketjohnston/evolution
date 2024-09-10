@@ -1,3 +1,13 @@
+IDEA: what does the path of optimization look like? Does it double back? Are gradient
+steps that are taken near the end harmfull if taken near the beginning, etc?
+
+TODO:
+test how training speed changes with size of network. Does it get harder to optimize
+with GA when the search space is higher dimensional?
+TODO investigate if it's better to normalize update magnitude every step, or if by
+doing what we're doing now, we are achieving a benefit from smaller updates when we are less confident
+and larger when we're more confident?
+
 IDEA: 
 generate completely random neural networks until we get a high-performing one on mnist.
 If it generalizes, then we can say that gradient descent has no effect on generalization ability,
@@ -771,6 +781,604 @@ I suppose we can also increase the population size so the randomly drawn vector 
 (which should work, since gradient descent works). I doubt this will work nearly well enough though since
 we never really sample things directly along the gradient 
 
+What if each gene has a "importance" value that determines its likelihood to be dropped at the next generation?
+When genes are first mutated they have low importance. Every time a gene is not dropped, its importance is 
+raised.
+
+Could have something where genes that have been lost are still tracked, and if a parent with a gene that
+has been lost reproduces with a parent that still has the gene, the offspring doesn't have the gene.
+
+We need to add multiple parents and some kind of sexual selection so the best mutation of each generation
+can eventually outcompete the others.
+
+Simplest possible place to start: just have 1/4 of pop reproduce, and their offspring has all of their genes.
+
+Things to try:
+1. see how often the optimal mutation wrt the training data is in the top 16 optimal mutations wrt the minibatch,
+etc.
+2. see if there is another more optimal way to estimate the gradient from a bunch of measurements, perhaps a weighted 
+average? see zeroth-order estimation paper RGE
+3. implement averaging into the evolution somehow - would need to encode additional information in the dna,
+-- like, multiplier for update -- and then we can take this multiplier into account when adding mutations,
+would allow us to effectively average the results from the top X of a single generation
+4. Could test the hypothesis that averaging the top 64 results from a single generation would actually work
+(like seen in the graph). This is probably the best place to start. If it doesn't work, we dont understand
+something and we have to figure out why. This will require some coding -
+probably easiest way to do it is to encode a weight with the dna like described in 3 above. But could
+also implement full network passing and see if that is better.
+
+Another TODO: try refactoring the way we run GA into one huge forward pass, like the colab.py in other,
+and see if lets us iterate faster
+
+Differences between colab.py and me:
+1. runs multiple generations per batch. This may also be the key to their huge speedup
+2. Averages the weights of the top 4 performing parents. This is similar to what I'm doing
+right now, or at least I think it should be doing (except I'm doing 64 / 256)
+
+Probably the learning rate is tuned incorrectly - we want a higher learning rate for the 
+averaged updates, and a lower learning rate for the single mutations, right?
+Or maybe I just have a bug? I'm unclear why we even needed to raise the learning rate at all...
+
+TODO add some check for if an experiment is not improving so we can prematurely stop it so we don't waste
+gpu time
+
+WHY is the average update not working as well? Brainstorming:
+1. learning rate isn't correct
+-- need to check both the un-averaged update and the averaged update
+   -- could add a check to gradient2 that actually updates the parameters
+      to figure out the best gradient
+2. cosine similarity with gradient isn't actually a good estimator of how to improve 
+parameters? 
+   -- TEST: can generate random perturbations, plot fitness improvement vs cosine-sim to gradient
+3. perhaps the average update is still too small? 
+   -- need to actually test the gradient
+   -- could add something complicated to the update that records the old policy params,
+      updates with all new ones, then normalizes the update. Would take a long time
+4. Test addin gthe top 64 parents together and see what the magnitude is
+
+Should we try the gradient2 experiment using actual random updates + evaluations
+rather than simply checking the cosine similarity with the gradient?
+
+When we just plot the improvements due to random mutation, the graph looks nothing like
+the cosine similarity graphs of the gradient. 
+<- we can double check this is working by plotting at an earlier checkpoint and making sure it shows
+how we are improving TODO
+
+So far:
+1. I found a bug, wasn't scaling learning rate correctly. doesn't seem to help gradient3.py results though
+2. Updated some spots where we were using the same dna list instead of copying it. Dont think this matters anywhere though
+
+Should I do the experiment where I see how much the cosine similarity correlates with an update fitness improvement?
+One with the average approach is that the "bad" mutations are always applied and never forgotten.
+This isn't enough to explain the cosine similarity discrepancy though
+
+TODO: understand why, after my bugfix of reducing the magnitude of the single gradient updates, convergence is way 
+slower. Did I introduce some other bug?
+Could just manually compute the norm of the update during normal training and see if it is increasing or decreasing
+etc.
+
+There may be a problem here where, the easiest minibatches result in the highest fitness, and so are always
+over sampled during mutation. If this is the problem it also explains why the colab.py approach works.
+Could also fix by evaling the current policy as well as the mutated policy on each mutation,
+to get an estimate of the fitness improvement rather than the overall fitness.
+
+ALRIGHT
+im 90% sure that the problem is that minibatch fitness is too high variance. minibatch fitness ranges from 
+0.2 to 0.7 (when ave fitness is 0.45), which will dominate any signal from perturbations. So we simply
+take the mutations from the luckiest minibatches, regardless of whether they improve performance or not.
+
+What other things could we do?
+1. evaluate "difference in fitness" on a minibatch and rank by this. This doubles computational cost,
+but possibly we could get away with a much smaller minibatch. Also it seems very unlikely to be physical
+- I can't really think of any direct biological analog except maybe some approximation via sexual selection
+2. larger minibatches - nonphysical, dont like
+3. Evaluate mutations for multiple generations? Seems similar to using larger minibatches, not sure
+what the benefit could be here. 
+- the difference between larger minibatches is that we can mutate as we go. Seems like this would have
+the same problems though, hard to disentangle mutation performance from minibatch performance.
+4. What if the evaluation fn is changed? What if we eval "number until incorrect" - this would
+introduce even more variance in minibatch performance, seems like it couldnt possibly help
+5 colab.py evals on one minibatch per generation, definitely fixes problem but I dont like it too much for a couple
+reasons - one is it's not physical, and the other is that it seems like using multiple minibatches
+would give us more information per compute if we can figure out how to use them effectively
+
+What if we do some kind of sexual reproduction where each individual is associated with its own minibatch
+(experience) and each individual can evaluate some set of other individuals on its minibatch,
+and selects the one that performs the best. Could do best-matching of some kind
+
+The way im doing it now works initially because mutations cause large enough changes to overcome the 
+noise from minibatch stochasticity. So another avenue would be trying to make the mutations more effective
+on average. This seems like it would also necessitate a different loss function / evaluation phase though.
+
+Doesn't realllly make sense to put it in policies, cuz we are going to need logic in eval anyway,
+might as well just put it all in eval. There may be an optimization where it goes in policies
+but I don't think we need to worry about that too much right now.
+
+Things to do:
+- profile the whole algorithm
+- figure out why policy creation time increases still
+- verify that creating the duplicate policy isn't too slow
+  --- checked, it takes the same amount of time as the original, although I didn't check cloning time
+- Should I try making some simpler minimalist code to make it easier to optimize?
+- see if current codebase can reproduce best 'all' results from previously to verify 
+  everything is still working nicely
+- verify that averaged updates have the same magnitude as single updates, I am skeptical of 
+  this because of how performance decreased when I thought I fixed a bug
+  --- this was verified, the 8 multiplier is very accurate
+- check if we can use higher lr for the averaged updates, since they are closer to 
+  the actual gradient direction 
+  --- checked, (tried x2), it's worse
+
+The reason why the colab.py is so much faster is the minibatch size is so small, and it trains on 
+the same minibatch for all mutations, so it is very rare to shuffle the dataset and we can easily prefetch
+for the next generation.
+
+I want to have each individual trained on a different minibatch - this is necessary when the individuals
+collect their own data, as in acting in an environment. 
+What we need to do is do some controlled experiments to see what exactly is making the algorithm take longer.
+
+Is it
+1. shuffling the data
+2. transferring the data to the gpu
+3. sending the data through the policy
+
+The easiest thing to isolate is number 3 - just setup some massive random dataset on the gpu
+and send it through the policy over and over again. 
+No point brainstorming further until we test this! 
+
+When simply loading the same data, already on the gpu, and sending it through the policy, this is the time
+0.026282072067260742
+When loading the same data starting on the cpu and adding ".to(device)", we get
+0.04416513442993164
+When I generate the whole dataset anew every tiem (on cpu) and then send to gpu, it takes
+1.0842211246490479
+When I generate on the gpu directly, it takes
+0.0339810848236084 WOW that is fast
+When I generate a tensor anew on the cpu every time, but send the same original tensor to the gpu, 
+it takes
+1.0541088581085205 
+When I generate 100 batches on the cpu, and then yield a randomly indexed subset of that 
+(on the cpu) and then transfer to the gpu, it takes about 1s again
+1.073004961013794
+When I compare doing this on mps vs cpu (with the same dataset size, which is using mult=20 on 
+my laptop) I get speed
+0.04650092124938965 < for cpu
+0.03665781021118164 < for gpu
+I think the 100 batches above is just slow because it doesn't all fit into ram. If this is 
+correct then if we try 30 batches it should be fast again
+Alright I'm pretty convinced this is a ram thing here, it goes fast if we just look at htop but if we start swiping between monitors it
+goes slower (presumably as it has to use more ram? idk)
+
+An entire population batch (500*256*28*28*4) takes 400MB
+Note 500*256 / 50k = 2.56x as large as the full training data
+The entire mninst dataset takes 179MB
+with our usual num_workers = 8, this takes about 1GB, should fit comfortably in RAM
+
+Things to try:
+mating with improvement-weighted average rather than simply top 64
+
+The ZO optimization paper, from what I can tell, got their graphs based on training for
+a fixed number of epochs. So their graph doesn't show that RGE doesn't optimize, just 
+that it optimizes slower (relative to the amount of training data).
+
+List of unanswered questions:
+1. Is there an alternative way to mate that's better than what I'm doing (perhaps weighted by fitness)
+--- weighted by fitness is in fact better, although the weights i'm using are a bit ad-hoc
+2. Will this method fail at higher dimensionalities?
+--- tried some larger hidden dimensions and it worked with a lower learning rate, although it
+    took longer as well
+3. What exactly was causing my original implementation to be so much slower than other/min.py?
+4. Is there any way to still perform well without computing fitness improvement due to mutation 
+   on the same batch?
+5. Will the current method work when using a non-differentiable objective?
+--- TODO need to let this run a long time
+6. Will it work with non-differentiable architecture?
+7. Is my way faster or slower than fixed batch?
+--- looks to be about the same
+--- there may not be much advantage to running every environment with a different seed then. Could use
+    same seed for each individual across a generation, then we wouldn't need to do this 
+    fitness improvement scheme also, right?
+
+When attempting to normalize the weights adjustment by layer, I think I am running into the following 
+problem:
+the first layer matters more than the second, so when we average the top 64, we get the a good direction
+for the first layer and a meaningless noise for the second. This also means that the averaged meaningless
+noise is smaller in magnitude. So if we normalize the update by each layer, we are amplifying this 
+meaningless vector.
+
+IDEA: If this "sampling from continuous and then evaling with discrete" tech works to optimize wrt 
+accuracy only, then would it work to optimize an entirely discrete (and therefore non-differentiable) network?
+
+some napkin math: brains evolved 500m years ago apparently. 
+The fastest reproducing mammal (mice) takes about 1m per generation, that gives 6b generations
+for modern brains to evolve?
+Apparently humans mutate 100-200 times per genome
+
+What if there are two stages of evolution:
+1. a differentiable network that computes the loss given targets etc.
+2. the main network
+1 is optimized w.r.t. some non-differentiable objective. 2. is optimized wrt the differentiable one.
+
+
+Currently we have two primary research directions:
+1. How can we improve convergence speed for basic MNIST with cross entropy?
+2. What changes need to be made to optimize effectively with non-differentiable objective (accuracy)?
+
+TODO: implement "stop when val acc stops decreasing" into other/min.py
+
+Brainstorming solutions to the non-differentiable objective:
+1. evolve a differentiable approximation to the true objective, and then optimize wrt that. 
+   Reminiscent of sexual selection - easy to evaluate "organism is bigger", which translates
+   to higher probability of success, etc.
+2. Some different mutation scheme - what if we allow increasing the network size, adding components
+   etc? Seems unlikely that this would solve the problem but I suppose in the completely general case,
+   the solution above is a subset of this one
+3. perhaps just scaling up could solve? 
+4. We could perhaps investigate WHY learning has stopped
+   - mutations improve fitness too rarely
+   - mutations decrease fitness too often
+   - minibatch fitness is too decorrelated with true fitness
+5. We can try optimizing wrt the full training data again instead of using minibatches
+   --results: learning still flatlines at around 90% val acc
+
+Here's what we're going to do
+1. evolve a network that takes images as input, logits as input, and outputs loss 
+2. train (sgd) a network to minimize loss of above
+
+What is the actual problem with optimizing non-differentiable goals?
+Suppose the loss curve looks like this
+_
+ |_
+   |__
+      |____________
+                   |_______
+The first couple of steps are easy to optimize. But after the third, there is no incentive to move right on the curve,
+since it is flat. The way I have things implemented right now, it isn't even capable of random walking that way, since we 
+always mutate from the previous best, and the best will be the first model on that level. 
+
+After updating so it's allowed to random walk, doesn't seem to help much at all.
+
+In the 1d case, a simple solution would be to just keep mutating in a given direction until fitness changes.
+In the high dimensional case, I am not sure how to generalize this - we can try, but most directions will not
+lead to decrease in fitness.
+- we are impossibly likely to select the "true" direction. TODO formalize this? 
+- although half of all directions are pointing slightly downward (the loss curve is locally a hyperplane), 
+  most of these downward directions are "nearly perpendicular" to the actual downward gradient
+
+Mantain a population of agents where we encourage diversity somehow?
+
+If we do the stochastic optimization with a massive population, any chance that would work better?
+
+TODO: why does a lower learning rate not work at all with sampled acc?
+
+num_workers = 2 is faster than 1 on the aws instance but adding more isn't any faster (the cpu ram is already fully being used
+at 2)
+
+The aws instance is slightly slower than the macbook at the same settings. The main difference I see is the number of cpu cores - 
+macbook has 8, aws instance has only 4. Is there a way to disable cores for a specific python thread and see if this is
+the difference?
+
+To make faster:
+remove pin_memory, just send to device in the workers
+remove tensorboard
+add --ipc=host to docker invocation
+
+Volatile GPU usage is still pretty low on aws instance, bottleneck has got to be data loading right?
+
+When I use workers and don't pin_memory or to(device), it is way slower
+
+Also make sure eval_every_generation is high enough to get an accurate metric - when it is low,
+the workers can spend the eval time loading the data. 
+Additionally this means that clearly the data loading is the bottleneck
+
+Aha! It is important that the .expand() step happens on the gpu. It appears that otherwise we transfer
+a huge tensor to the gpu.
+
+This also makes it very clear that the shuffling of the data is the bottleneck
+-- WAIT - it wasn't actually the shuffling, I just needed to use persistent_workers=True.
+I guess this is because the MNIST dataset actually loads the whole thing into memory? Whereas if the 
+workers themselves were just loading a csv and then loading datapoints at runtime, this wouldn't matter
+
+Also just use a normal dataloader.
+
+on the p3.2xlarge instance:
+
+batch_size 256:
+    512 popsize:
+    .01, not fully using gpu
+    2048 popsize:
+    .025, not fully using gpu (intermittent 0s)
+
+
+batch_size 500:
+    with 256 popsize
+    .015s per generation for default settings
+    with 512 popsize
+    .015s per generation for default settings <<< also these clearly are not using full GPU, utilization is low on nvidia-smi
+    with 1024 popsize:
+    .024s per generation
+    with 4096 popsize:
+    0.087s per generation
+    8192 gives cuda OOM
+
+batch_size 1000:
+    with 512 popsize:
+    .03 per generation << also not using full GPU
+
+batch_size 2000:
+    with 512 popsize:
+    .068 per generation << also not using full GPU, appears to be dataloader issue
+
+TODO check that image preprocessing is correct (and the same) with each loader type
+
+NOTES:
+the first batch from the dataloader takes longer (~0.2s). This is true even when we dont shuffle. 
+Why is this? I'm guessing the workers just don't prefetch that batch?
+-- whatever, seems marginal (10 generations every 120 generations so it's like a 8% slowdown...)
+
+.044 torch dataloader vs .06 for my MPD (after fixes)
+
+TODO check that our forwarding two inputs doesn't slow things down significantly
+
+HMM OK, if we reduce the number of workers in our MPD then it is just as fast as torch dataloader, wtf
+Yeah we can get even faster than train_dataloader (.010s with default settings)
+OK seems like both loaders are the same speed when we run with 1 worker (and this is the fastest).
+So multiple workers is actually slowing stuff down, I wonder why. Synchronization?
+
+Also we still do drop to 0% utilization once in awhile
+
+
+Alright now that we have reasonably fast training, we want to figure out what settings give the 
+best results per unit time (on given compute)
+
+Easiest way is to just run with a bunch of different settings and see how they all go
+Alternatively, we could do some gradient analysis 
+1. given a batch size and a population, what is the best estimate of the true gradient?
+2. given a batch size, what is the best population size?
+
+TODO: experiment with very few parents
+
+Seems pretty essential to use large number of parents
+possible that I just need to change learning rate for different numbers?
+Maybe can fix by normalizing update
+
+Is it time to just start running on atari? We have something that optimizes non-differentiable
+objectives well. What are the differences between this paper and the original paper? 
+-- not much, lol. Probably the only "novel" thing I've discovered is that we can optimize
+wrt accuracy if we sample from the network distribution, which agent methods have been doing
+for ages anyway.
+- So I guess our next direction is to try to apply the above idea to binary networks etc and see if it works...
+
+MNIST simple MLP - 4 layers, 4096 binary activations per layer. They way the layer works in the first paper 
+(binarized neural networks) is they just multiply W by the activations like normal, except W is constrained
+to be either 1 or -1. This produces some output (an integer output), which is then passed through a
+batchnorm layer, and then binarized again with a hard_sigmoid + round layer (modified so that gradients can pass
+through it).
+
+Probably the first thing I should try before doing anything more complicated is just randomly flipping 
+bits of W with some probability and mutating that way, and let the network output a probability for its
+final layer so we can optimize wrt cross entropy anyway...
+
+Currently, the problem is since we start at 0 we are never getting anywhere close to above the necessary threshold for internal activations.
+-- above is fixed but still we are not learning.
+My first attempt had much too high variance output logits, the network always classified things as 100% or 0%.
+By decreasing the temperature a lot we fix this but we still aren't learning.
+
+I want to spend some time thinking about how to optimize speed since this moves so much slower than our previous implementation.
+The problem is, previously we were able to use einsum that never requires storing the intermediate multiplication product
+before summing (it's doing matrix multiplication instead of elementwise multiplication + sum). We need to figure out a way 
+to do this with bool
+
+This is how fast we run on p4
+gen 2519 | loss: 51.1249 | accuracy: 92.72% | elapsed time 61.1 | seconds per generation: 0.024
+
+Let's see if binary is also that fast?
+
+Binary right now has the torch.concat op the bottleneck. Doesn't help to preallocate the memory either.
+(it is a 2x slowdown approximately just having this op in here.) 
+Probably this is slow because it's concatting a huge vector, (1024x500x28*28). This definitely isn't necessary,
+we can just keep track of two W, one for positive and one for negative, run them both and then sum them up
 
 
 
+BEST SO FAR (75%):
+temperature 0.8
+lrs = [0.0001]
+population_sizes = [1024]
+num_parents_for_matings = [1]
+batch_sizes = [500]
+hidden_sizes=[128]
+prefix = 'binary_test1'
+fitness_weights=False
+fitness_types = ['cross_entropy'] # 'cross_entropy','accuracy','sampled_acc'
+load_from = ''
+model_type = 'EvoBinarized'
+
+BEST SO FAR (79%):
+temperature 0.8
+lrs = [0.0001 * 0.03]
+hidden_sizes=[4096]
+layers=1
+-- this is expected ~20 bit flips per mutation
+
+TODO NEXT:
+1. Figure out how we can use the same architecture as the OG binarization paper. 
+Probably we need to do multiple steps for higher populations (so we can fit
+each step into memory).
+-> decided to just do simple implementation using one elites
+DONE 2. Debug the slowdown when using higher hidden_sizes (time explodes until only doing
+one generation in between every eval)
+3. Hyperparam search for the new architecture (temperature, learning rate, popsize, etc)
+4. Implement mating (instead of just asexual) 
+---- Random thought: the flip masks can be combined somehow and applied to the base 
+     (rather than combining the mutated individuals directly)
+     This allows us to set the threshold for a flipped connection. 
+
+even just 1024 pop size with 4096x4096 weights does not fit into memory (17G) - actual 34G with x and notx.
+
+Options:
+1. Just use a smaller population size until it works. Let's real quick test what this could be?
+--- on macbook it's 16
+2. If we separate the population into batches, what are the difficulties with this:
+--- if we want to do some kind of weighted averaging, we would need to store all batches
+    weights + results anyway. They dont fit on the gpu so we'd need to move them to the cpu
+    This is probably going to be slow although I am not 100% sure
+--- could instead store the top X% of each batch. This seems like a fine enough solution,
+    and we don't need to even implement it for awhile (for now we're just doing, elite reproduces only)
+--- if we are doing elite reproduces only, is there much different from just using a small batch
+    size and taking the elite every time? Probably not too much 
+
+CONSENSUS: 
+- just implement elites and then use the max batch size we can, see how this works.
+Also need to implement "improvement", otherwise simply having a lucky batch can cause us to 
+mutate in a bad direction.
+
+TODO doesn't seem like using elites actually helps much at all even for small pops
+
+TODO NEXT:
+- load the latest checkpoint and experiment with hyperparams to see if we can get it to learn faster.
+- verify that our elites implementation is actually doing something, I am skeptical since it didn't matter in earlier experiments
+- if hyperparam tuning doesn't increase speed much, try mating
+- if neither work, need to brainstorm more ideas
+
+flip one at a time seems best! (at least at 50% acc). So let's just hard-implement that. That also makes mating a lot simpler
+
+TODO NEXT:
+smallest possible learning rate (1 bit change per mutation) still caps out at 70% acc. Need to investigate what the failure mode is here.
+1. Can try this small learning rate on the single network to get an idea of what acc we should be expecting
+2. Can try learning with larger batches (full training data) - or explore in some other way whether the problem is that
+   we are updating the network with "bad" updates with respect to the full training data, despite them being improvements
+   with respect to a single batch
+3. There is another possibility - the network architecture is not amenable to single-bit updates at a certain point.
+   Can investigate this - perhaps my activation function is bad, perhaps too many neurons are dieing. Would need to brainstorm this more
+
+Indeed, when we try with larger batches performance keeps improving. Interestingly, though, the average acc across population seems to 
+mostly level out even as the best validation acc (and loss) continues improving. 
+- I suspect that most mutations decrease the acc by quite a lot, so this "decreased acc" is a dominating factor, which also probably has
+pretty high variance. 
+- This suggests we could perhaps speed up convergence if we don't try mutating connections that have already been tried - a simple implementation
+of this could be randomly permuting all possible mutations, and just iterating through all of them one at a time, and then repeating.
+- Actually this is unlikely to matter much for now, we just did 6k generations of 16  individuals for a total of 96000 mutations, but there are
+~52million parameters here. I haven't done the full computation but this seems quite unlikely that we would be mutating the same parameter many
+times in this timeframe.
+
+What we should be doing is everything we can do optimize the training before we really scale it up. Ideas:
+1. mating
+2. batch norm
+3. cuda kernel
+
+
+TODO NEXT:
+0. mating CHECK, it works, slight (20%) speedup
+1. implement some kind of batch norm, see if it's better CHECK seems marginally better but probably not worth using
+2. Is it time to bite the bullet and actually implement a cuda kernel?
+
+Can we evaluate faster given that we only mutate one at a time? 
+- if we cache results for each layer then we only have to compute after the current layer
+- BUT we would have to cache results for every datapoint, seems impractical
+additionally the layers after the mutation all need to be re-computed anyway 
+
+Random note, jetsen nano developer kit is a small gpu can buy to use for cuda development, or robotics projects etc.
+
+2060 has compute capability 7.5
+
+Sometimes the CUDA error you are getting can be from pytorch incompatibility with the cuda version
+-- perhaps install pytorch from source?
+
+for pop size 64
+num parents 1
+batch size all
+mb size 4096
+hs 128
+layers 1
+elite True
+
+Param count:  203264
+Expected flips per mutation:  -203264
+Eval time: 0.4555537700653076
+gen 9 | loss: 2.6011 | accuracy: 11.62% | elapsed time 5.6 | seconds per generation: 0.568
+Eval time: 0.4529104232788086
+gen 18 | loss: 2.4774 | accuracy: 14.73% | elapsed time 11.1 | seconds per generation: 0.564
+Eval time: 0.47159457206726074
+gen 27 | loss: 2.3831 | accuracy: 17.90% | elapsed time 16.7 | seconds per generation: 0.564
+Eval time: 0.4531440734863281
+gen 36 | loss: 2.3115 | accuracy: 20.04% | elapsed time 22.2 | seconds per generation: 0.566
+Eval time: 0.45537352561950684
+gen 45 | loss: 2.2412 | accuracy: 22.53% | elapsed time 27.7 | seconds per generation: 0.566
+Eval time: 0.4597043991088867
+gen 54 | loss: 2.1705 | accuracy: 24.47% | elapsed time 33.3 | seconds per generation: 0.566
+Eval time: 0.455824613571167
+gen 63 | loss: 2.1056 | accuracy: 26.98% | elapsed time 38.9 | seconds per generation: 0.566
+Eval time: 0.45394039154052734
+gen 72 | loss: 2.0505 | accuracy: 29.02% | elapsed time 44.4 | seconds per generation: 0.567
+Eval time: 0.458568811416626
+gen 81 | loss: 1.9970 | accuracy: 31.06% | elapsed time 50.0 | seconds per generation: 0.566
+Eval time: 0.4564549922943115
+gen 90 | loss: 1.9407 | accuracy: 33.08% | elapsed time 55.5 | seconds per generation: 0.566
+Eval time: 0.4547138214111328
+gen 99 | loss: 1.8932 | accuracy: 35.34% | elapsed time 61.1 | seconds per generation: 0.567
+Eval time: 0.46105527877807617
+gen 108 | loss: 1.8511 | accuracy: 36.26% | elapsed time 66.6 | seconds per generation: 0.566
+Eval time: 0.4657912254333496
+gen 117 | loss: 1.8069 | accuracy: 39.00% | elapsed time 72.2 | seconds per generation: 0.567
+Eval time: 0.4526040554046631
+gen 126 | loss: 1.7733 | accuracy: 40.38% | elapsed time 77.8 | seconds per generation: 0.566
+
+
+population_sizes = [2]
+num_parents_for_matings = [1]
+batch_sizes = ['all']
+minibatch_size = 4096
+hidden_sizes=[64] 
+layers 1 
+elite True
+Param count:  101632
+Expected flips per mutation:  -101632
+Eval time: 0.46227121353149414
+gen 120 | loss: 2.7856 | accuracy: 14.36% | elapsed time 5.5 | seconds per generation: 0.042
+Eval time: 0.45279765129089355
+gen 229 | loss: 2.4007 | accuracy: 15.36% | elapsed time 10.5 | seconds per generation: 0.042
+Eval time: 0.4701356887817383
+gen 338 | loss: 2.2811 | accuracy: 19.12% | elapsed time 15.6 | seconds per generation: 0.042
+Eval time: 0.45237064361572266
+gen 447 | loss: 2.1982 | accuracy: 21.82% | elapsed time 20.6 | seconds per generation: 0.042
+Eval time: 0.44556093215942383
+gen 556 | loss: 2.1021 | accuracy: 26.08% | elapsed time 25.6 | seconds per generation: 0.042
+Eval time: 0.44850802421569824
+gen 665 | loss: 2.0585 | accuracy: 28.34% | elapsed time 30.6 | seconds per generation: 0.042
+Eval time: 0.4453911781311035
+gen 774 | loss: 2.0070 | accuracy: 30.68% | elapsed time 35.6 | seconds per generation: 0.042
+Eval time: 0.4454333782196045
+gen 883 | loss: 1.9681 | accuracy: 32.51% | elapsed time 40.6 | seconds per generation: 0.042
+Eval time: 0.4503941535949707
+gen 992 | loss: 1.9139 | accuracy: 34.03% | elapsed time 45.6 | seconds per generation: 0.042
+Eval time: 0.4450979232788086
+gen 1101 | loss: 1.8435 | accuracy: 37.00% | elapsed time 50.6 | seconds per generation: 0.042
+Eval time: 0.4585263729095459
+gen 1210 | loss: 1.7918 | accuracy: 38.86% | elapsed time 55.6 | seconds per generation: 0.042
+Eval time: 0.4545421600341797
+gen 1319 | loss: 1.7546 | accuracy: 40.46% | elapsed time 60.6 | seconds per generation: 0.042
+
+
+Alright, the plan is to implement a method to convert from EvoBinaryOptimzed to EvoBinary (and back). 
+Then we will run both and see where they differ.
+
+One inherent difference in the way I run both right now is how I pad the optimized one to
+have input size a multiple of 64. I don't do this in the non-optimized one.
+
+It appears that the input is not flipped but the weights are?
+
+ALRIGHT we got the optimized version working, here is is with the following settings:
+pop size 2 parents 1 batch sizes all mb size 4096 hidden sizes 64 layers 1 elite True
+Param count:  1684
+Expected flips per mutation:  -1684
+Eval time: 0.0005500316619873047
+gen 921 | loss: 1.9329 | accuracy: 31.20% | elapsed time 5.0 | seconds per generation: 0.005
+Eval time: 0.000461578369140625
+gen 1856 | loss: 1.5338 | accuracy: 50.71% | elapsed time 10.0 | seconds per generation: 0.005
+Eval time: 0.0004589557647705078
+gen 2793 | loss: 1.3486 | accuracy: 57.99% | elapsed time 15.0 | seconds per generation: 0.005
+Eval time: 0.0004596710205078125
+gen 3739 | loss: 1.2779 | accuracy: 61.15% | elapsed time 20.0 | seconds per generation: 0.005
+Eval time: 0.00045752525329589844
+gen 4686 | loss: 1.1867 | accuracy: 63.75% | elapsed time 25.0 | seconds per generation: 0.005

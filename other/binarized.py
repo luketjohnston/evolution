@@ -77,6 +77,8 @@ class EvoBinarizedLayer(nn.Module):
 
             og_weights = self.w[i0,0,0,i2,i3]
             #print('og_weights:', og_weights)
+            #print("self.w shape:", self.w.shape)
+            #torch.cuda.empty_cache()
             self.offspring = self.w.repeat([1, population_size,1,1,1])
             #print('offspring shape:', self.offspring.shape)
             #print('offspring indexed shape:', self.offspring[i0,i1,0,i2,i3])
@@ -113,13 +115,15 @@ class EvoBinarizedLayer(nn.Module):
             i2 = i2[parents]
             i3 = i3[parents]
 
-            og_weights = self.w[i0,0,0,i2,i3]
+            og_weights = self.w[i0,0,0,i2,i3].clone()
             self.w[i0,0,0,i2,i3] = (1.0 - og_weights)
         else:
-            self.w = self.offspring[:, parents[0]:parents[0]+1, :, :, :]
+            # must clone here, otherwise w retains offspring memory
+            self.w = self.offspring[:, parents[0]:parents[0]+1, :, :, :].clone()
 
 
     def reset(self):
+        del self.offspring # probably not important
         self.offspring = None
 
     def forward(self, x):

@@ -66,7 +66,7 @@ population_sizes = [16]
 num_parents_for_matings = [1]
 batch_sizes = ['all']
 # This is already at full gpu-util so no need to increase further
-minibatch_size = 4096
+minibatch_size = 512
 hidden_sizes=[4096] 
 fitness_weights=False
 fitness_types = ['cross_entropy'] # 'cross_entropy','accuracy','sampled_acc'
@@ -84,8 +84,8 @@ activation='const'
 prefix = 'optimized_test1.2'
 model_type = 'EvoBinarizedOptimized'
 
-#prefix = 'nonoptimized_test1'
-#model_type = 'EvoBinarized'
+prefix = 'nonoptimized_test1'
+model_type = 'EvoBinarized'
 
 
 #load_from = 'saves/copy/min_july22_hyperparam_search3_hs128_sbTrue_lr0.027_mm8_bs500_ps1024_mn256_rs5096758358.pt' # 93.5 val acc
@@ -99,7 +99,7 @@ device = 'cuda' if torch.cuda.is_available() else 'mps'
 eval_every_time = 300 # evaluation is done at specific time intervals, so it doesn't affect
                      # the time-based comparison between different hyperparams. In seconds.
 
-eval_every_time=5
+eval_every_time=10
 save_every_time=600
 
 
@@ -183,6 +183,10 @@ def evaluate(model: nn.Module, val_loader, verbose=True):
         pred = output.argmax(dim=-1, keepdim=True) 
         correct += pred.eq(target.view_as(pred)).sum().item() 
         total += target.size(0)
+
+        del output # remove these so they no longer take memory, probably not important
+        del input
+        del target
         if total >= 10000: break
     if verbose: print(f"Eval time: {time.time() -t1}")
 
@@ -255,6 +259,8 @@ def compute_loss(original_output, mutation_output, target, config):
 
 #@torch.inference_mode()
 def main(config):
+
+ with torch.no_grad():
     
     # this slows things down when cpus are limited
     #tb = program.TensorBoard()
@@ -352,15 +358,16 @@ def main(config):
     last_eval_generation = 0
 
 
-    with profile(
-           activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-           schedule=torch.profiler.schedule(
-               wait=3,
-               warmup=2,
-               active=3),
-           profile_memory=True,
-           on_trace_ready=trace_handler
-           ) as p:
+    #with profile(
+    #       activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+    #       schedule=torch.profiler.schedule(
+    #           wait=3,
+    #           warmup=2,
+    #           active=3),
+    #       profile_memory=True,
+    #       on_trace_ready=trace_handler
+    #       ) as p:
+    if True:
     
         done = False
         while not done:
@@ -376,6 +383,8 @@ def main(config):
 
                     minibatch_x = torch.split(input, config['minibatch_size'], dim=0)
                     minibatch_y = torch.split(target, config['minibatch_size'], dim=0)
+                    del input # probably not important to have these del lines
+                    del target
                     num_minibatches = len(minibatch_x)
 
 
@@ -399,6 +408,10 @@ def main(config):
                         #print("Improvements_mb:", improvements_mb)
                         improvements += improvements_mb
                         ave_fitness += ave_fitness / num_minibatches
+                        del original_output # remove these so they don't take memory anymore, probably not important
+                        del mutation_output
+                        del input
+                        del target
                         #print(improvements)
 
 
@@ -473,7 +486,7 @@ def main(config):
                     print("Uploading to aws...")
                     upload_to_aws(experiment_name)
 
-                p.step()
+                #p.step()
     upload_to_aws(experiment_name)
 
 

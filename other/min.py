@@ -66,7 +66,7 @@ population_sizes = [16]
 num_parents_for_matings = [1]
 batch_sizes = ['all']
 # This is already at full gpu-util so no need to increase further
-minibatch_size = 512
+minibatch_size = 4096
 hidden_sizes=[4096] 
 fitness_weights=False
 fitness_types = ['cross_entropy'] # 'cross_entropy','accuracy','sampled_acc'
@@ -81,11 +81,16 @@ max_generation = 200000000
 #activation='batch_norm'
 activation='const'
 
-prefix = 'optimized_test1.2'
+# speedy learning
+#population_sizes = [2]
+#hidden_sizes=[64]
+#layers=1
+
+prefix = 'optimized_test1.3'
 model_type = 'EvoBinarizedOptimized'
 
-prefix = 'nonoptimized_test1'
-model_type = 'EvoBinarized'
+#prefix = 'nonoptimized_test1'
+#model_type = 'EvoBinarized'
 
 
 #load_from = 'saves/copy/min_july22_hyperparam_search3_hs128_sbTrue_lr0.027_mm8_bs500_ps1024_mn256_rs5096758358.pt' # 93.5 val acc

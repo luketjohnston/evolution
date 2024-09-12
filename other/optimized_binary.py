@@ -10,9 +10,6 @@ except:
   torch.ops.load_library('other/build/lib.linux-x86_64-cpython-311/binary_forward.cpython-311-x86_64-linux-gnu.so')
 
 
-# TODO everything
-
-torchtype=torch.float
 
 class EvoBinarizedLayerOptimized(nn.Module):
     def __init__(self, in_features: int, out_features: int, elite=True, activation='none'):
@@ -27,8 +24,8 @@ class EvoBinarizedLayerOptimized(nn.Module):
         in_ints = (in_features + 63) // 64
         self.rounded_in_features = in_ints * 64
 
-        # the first dimension is for whether this w acts on x, or on ~x
-        w = torch.randint(low=-2**63, high=2**63-1, size=[2,1,in_ints,out_features], dtype=torch.int64)
+        # the size 2 (second to last) dimension is for whether this w acts on x, or on ~x
+        w = torch.randint(low=-2**63, high=2**63-1, size=[1,in_ints,2,out_features], dtype=torch.int64)
         
         self.register_buffer('w', w)
         if activation == 'const':
@@ -39,11 +36,11 @@ class EvoBinarizedLayerOptimized(nn.Module):
         #print('in next generation,  self w at beginning:', self.w)
         assert lr==-1
 
-        _, _, in_features, out_features = self.w.size()
+        _, in_features, _, out_features = self.w.size()
     
-        i0 = torch.randint(2, size=(population_size,), device=device)
-        i1 = torch.arange(population_size, device=device)
-        i2 = torch.randint(in_features, size=(population_size,), device=device)
+        i0 = torch.arange(population_size, device=device)
+        i1 = torch.randint(in_features, size=(population_size,), device=device)
+        i2 = torch.randint(2, size=(population_size,), device=device)
         i3 = torch.randint(out_features, size=(population_size,), device=device)
 
         # I used to put all these into one tuple called "indices" and it just would
@@ -53,10 +50,10 @@ class EvoBinarizedLayerOptimized(nn.Module):
         self.i2 = i2.clone()
         self.i3 = i3.clone()
 
-        self.w = self.w[:,0:1,:,:].repeat([1, population_size,1,1])
+        self.w = self.w[0:1,:,:,:].repeat([population_size,1,1,1])
 
         rand_exponents = torch.randint(low=0,high=63,size=self.w[i0,i1,i2,i3].size(), device=self.w.device, dtype=torch.int64);
-        bits_to_flip = torch.pow(2, rand_exponents)
+        bits_to_flip = torch.pow(2, rand_exponents) # TODO replace this with left shift?
         self.bits_to_flip = bits_to_flip
 
 
@@ -87,7 +84,7 @@ class EvoBinarizedLayerOptimized(nn.Module):
             #print("i3 before:", i3.shape, i3)
 
             # take only the bits that have been flipped for the set of parents
-            i0 = i0[parents]
+            i1 = i1[parents]
             i2 = i2[parents]
             i3 = i3[parents]
             #print("bits_to_flip before indexing:", self.bits_to_flip.shape, self.bits_to_flip)
@@ -99,9 +96,9 @@ class EvoBinarizedLayerOptimized(nn.Module):
             #print("bits_to_flip:", bits_to_flip.shape, bits_to_flip)
             #print("self.w.shape before indexing: ", self.w.shape)
 
-            self.w[i0,0,i2,i3] = torch.bitwise_xor(self.w[i0,0,i2,i3], bits_to_flip)
+            self.w[0,i1,i2,i3] = torch.bitwise_xor(self.w[0,i1,i2,i3], bits_to_flip)
         elif num_parents_for_mating == 1:
-            self.w[:,0,:,:] = self.w[:, parents[0], :, :].clone()
+            self.w[0,:,:,:] = self.w[parents[0], :,:, :].clone()
             #self.w = self.w[:, parents[0]:parents[0]+1, :, :].clone()
         else:
             assert False
@@ -111,7 +108,7 @@ class EvoBinarizedLayerOptimized(nn.Module):
 
 
     def reset(self):
-        self.w = self.w[:,0:1,:,:]
+        self.w = self.w[0:1,:,:,:]
 
     def forward(self, x):
         #print("Forwarding x with shape ", x.shape) # these look fine

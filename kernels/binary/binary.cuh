@@ -27,8 +27,8 @@ namespace binary_forward {
 
 // we can do 64 bit operations the fastest so we want to primarily 
 // work with those
-typedef int64_t device_inttype;
-const int DEVICE_INTTYPE_BITS{sizeof(device_inttype) * 8};
+// TODO update above comment, we are testing with 32 bit instead
+typedef int32_t device_inttype;
 const int DEVICE_INTTYPE_BYTES{sizeof(device_inttype)};
 // However, there are only 32 warps that can collect bit results with __ballot_sync
 // So we need the output to have 32-bit precision
@@ -50,7 +50,7 @@ at::Tensor host_helper(at::Tensor input, at::Tensor weight, int thresh, bool ver
 at::Tensor binary_forward_cuda(
         const at::Tensor& input, 
         const at::Tensor& weight, 
-        const device_inttype thresh,
+        const int64_t thresh,
         const bool verbose
         );
 

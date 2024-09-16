@@ -4,7 +4,10 @@ import torch.nn as nn
 from test import print_binarized
 
 
-torch.ops.load_library('other/build/lib.linux-x86_64-3.8/binary_forward.cpython-38-x86_64-linux-gnu.so')
+try:
+  torch.ops.load_library('other/build/lib.linux-x86_64-3.8/binary_forward.cpython-38-x86_64-linux-gnu.so')
+except:
+  torch.ops.load_library('other/build/lib.linux-x86_64-cpython-311/binary_forward.cpython-311-x86_64-linux-gnu.so')
 
 
 # TODO everything

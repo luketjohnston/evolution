@@ -244,8 +244,7 @@ __global__ void binary_forward(
           intType_t o = output_tile_x + xi * warp_size + threadIdx.x;
 
           if (b < batch_size && (j + tile_offset < in_ints) && o < out_size) { // TODO double check?
-            acc[xi][yi] += __popcll(input_regs[yi] & weight_regs[xi]);
-            acc[xi][yi] += __popcll(~input_regs[yi] & not_weight_regs[xi]);
+            acc[xi][yi] += __popcll((input_regs[yi] & weight_regs[xi]) | (~input_regs[yi] & not_weight_regs[xi]));
 
             //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u adding to acc: %u \n" , threadIdx.x, threadIdx.y, j, acc - tmp);};
 
@@ -367,8 +366,7 @@ __global__ void binary_forward_with_threshold(
           intType_t o = output_tile_x + xi * warp_size + threadIdx.x;
 
           if (b < batch_size && (j + tile_offset < in_ints) && o < out_size) { // TODO double check?
-            acc[xi][yi] += __popcll(input_regs[yi] & weight_regs[xi]);
-            acc[xi][yi] += __popcll(~input_regs[yi] & not_weight_regs[xi]);
+            acc[xi][yi] += __popcll((input_regs[yi] & weight_regs[xi]) | (~input_regs[yi] & not_weight_regs[xi]));
 
             //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u adding to acc: %u \n" , threadIdx.x, threadIdx.y, j, acc - tmp);};
 

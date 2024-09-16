@@ -17,7 +17,12 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
 
 
+
 add_executable(main main.cu binary.cu binary.cuh "/home/luke/GA/kernels/binary/tclap-1.2.5/include/tclap/CmdLine.h")
+
+target_compile_options(main PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:
+                       --generate-line-info
+                       >)
 
 #target_link_libraries(binary argparse "${TORCH_LIBRARIES}" "${PYTHON_LIBRARIES}")
 target_link_libraries(main "${TORCH_LIBRARIES}" "${PYTHON_LIBRARIES}")

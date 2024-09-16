@@ -1382,3 +1382,49 @@ Eval time: 0.0004596710205078125
 gen 3739 | loss: 1.2779 | accuracy: 61.15% | elapsed time 20.0 | seconds per generation: 0.005
 Eval time: 0.00045752525329589844
 gen 4686 | loss: 1.1867 | accuracy: 63.75% | elapsed time 25.0 | seconds per generation: 0.005
+
+Optimization notes:
+1. Somehow we need to schedule more warps
+-- possibly I am allocating too much shared memory and so that's limiting the number of warps that
+   can be scheduled at once, or some other reason, look into this 
+   (see https://forums.developer.nvidia.com/t/increasing-number-of-active-warps-per-scheduler/195614)
+2. Consider if I can rewrite code in some way such that it doesn't require as many synchronizations
+3. Learn more about what a threadblock is, why do we actually want to have 32 threads in the y
+   for each threadblock? Probably because they can share memory?
+
+Things to look into:
+1. global memory access is faster if the width of the array is a multiple of the warp size - look
+   into this and see if we are satisfying this (see "Two-dimensional arrays" section under performance
+   guidelines)
+   - CHECK
+2. branches - I think this should be fine, I never have if/else
+   - CHECK
+3. can __restrict__ be used on shared memory? 
+4. look for type conversions between 32 bit and 64 bit? Seems like 64-bit isn't any faster than 32-bit 
+   arithmetic so may be worth removing 64 bit stuff entirely
+   - partial check, converted to int32 but should double check for all converions. This did not
+   speed anything up
+5. Try again to increase occupancy - if we have 2 blocks per SM, then one block can be doing
+   compute while the other waits at synchronization barriers.
+   whil
+   don't have to wait at synchronization barriers
+-- We need to decrease the block Y size by half so we can fit two. Then we need to add a loop
+to loading the W into shared memory, since blockSize.y will be less than blockSize.x (which must stay 
+at the warp size)
+
+OK - we are limited by shared memory operations, which means we need to increase the amount of compute done per shared memory
+operation. Consider what would happen if we double the output y-dimension and the output x-dimension.
+This multiplies the number of outputs that a single block computes by 4, while it only multiplies the
+amount of shared memory that needs to be loaded per block by 2. Note also that it reduces the total amount
+of shared memory loads per kernel: we do not need to re-load an input row for each of the two outputs
+in the original case (since they are both computed at once).
+
+
+
+Getting errors with latest optimizations, also need to check that they actually work (run with python)
+
+Alright, after we optimized shared mem -> registers -> compute, now the limit is the XU pipeline,
+pretty sure this is just the popcount op (only shows MIO throttle on the popcount ops)
+
+Moving back to int64 operations gives 120ms->117ms, not sure if significant. So it seems pretty clear
+the bottleneck is the XU pipeline for the popcount op.

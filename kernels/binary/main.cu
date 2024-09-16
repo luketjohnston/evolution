@@ -12,19 +12,21 @@
 #include "debug.h"
 #include <time.h> // for srand init
 #include "binary.cuh"
+#include "cuda_profiler_api.h"
 #define  torch_device_inttype torch::kInt64
 #define  torch_output_inttype torch::kInt32
 
-const bool COMPARE_WITH_CPU{true};
-const bool STRESS_TEST{false};
-const unsigned int BATCH_SIZE{21}; // TODO should we make threads be max of batch_size and 32?
-const unsigned int POPULATION_SIZE{1};
+const bool COMPARE_THRESHOLD{true};
+const bool COMPARE_NOTHRESHOLD{true};
+const bool STRESS_TEST{true};
+const unsigned int BATCH_SIZE{1}; // TODO should we make threads be max of batch_size and 32?
+const unsigned int POPULATION_SIZE{2};
 // IN_SIZE must be large enough for a full warp to load integers into memory.
 // so it has to be at least 32*32 TODO is this still true?
-const unsigned int IN_SIZE{28*28}; // in bits
+const unsigned int IN_SIZE{64}; // in bits
 const unsigned int OUT_SIZE{64}; // in bits
 
-const int DEVICE_INTTYPE_BITS = binary_forward::DEVICE_INTTYPE_BITS;
+const int DEVICE_INTTYPE_BITS = 32;
 
 typedef binary_forward::device_inttype device_inttype;
 typedef binary_forward::output_inttype output_inttype;
@@ -70,7 +72,7 @@ void printOut(at::Tensor out, bool bits) {
     for (int b = 0; b < batch_size; b++) {
       for (int o = 0; o < out_size; o++) {
         if (bits) {
-          std::cout << "p" << p << "b" << b << "o" << o << ":" << std::bitset<DEVICE_INTTYPE_BITS>( out.index({p,b,o}).item<device_inttype>()) << std::endl;
+          std::cout << "p" << p << "b" << b << "o" << o << ":" << std::bitset<64>( out.index({p,b,o}).item<device_inttype>()) << std::endl;
         } else {
 
           std::cout << "p" << p << "b" << b << "o" << o << ":" << out.index({p,b,o}).item<device_inttype>() << std::endl;
@@ -139,7 +141,7 @@ int main( int argc, char *argv[] )
   //    population_size = vm["p"].as<int>();
   //} 
 
-  unsigned int in_ints = (in_size + DEVICE_INTTYPE_BITS - 1) / DEVICE_INTTYPE_BITS; 
+  unsigned int in_int64s = (in_size + 63) / 64; 
 
 
   srand(time(NULL));;
@@ -155,6 +157,9 @@ int main( int argc, char *argv[] )
   fprintf(stdout, "Population size is %d\n",population_size);
   fprintf(stdout, "sizeof(int)%lu\n",sizeof(int));
   fprintf(stdout, "sizeof(device_inttype)%lu\n",sizeof(device_inttype));
+  
+  fprintf(stdout, "X multiplicity is %d\n", binary_forward::OUT_TILE_X_MULTIPLICITY);
+  fprintf(stdout, "Y multiplicity is %d\n", binary_forward::OUT_TILE_Y_MULTIPLICITY);
   std::cout << "Verbose is: " << verbose << std::endl;
 
   auto options =
@@ -169,15 +174,15 @@ int main( int argc, char *argv[] )
   const device_inttype minlong = std::numeric_limits<device_inttype>::min();
 
 
-  const at::Tensor h_input = torch::randint(minlong,maxlong,{population_size,batch_size,in_ints},options);
-  const at::Tensor h_weight = torch::randint(minlong,maxlong,{2,population_size,in_ints,out_size},options);
+  const at::Tensor h_input = torch::randint(minlong,maxlong,{population_size,batch_size,in_int64s},options);
+  const at::Tensor h_weight = torch::randint(minlong,maxlong,{population_size,in_int64s,2,out_size},options);
 
   const at::Tensor d_input = h_input.to(torch::kCUDA);
   const at::Tensor d_weight = h_weight.to(torch::kCUDA);
 
   // Note this is different than IN_SIZE / 2 because when IN_SIZE is not divisible
   // by DEVICE_INTTYPE_BITS, we add extend IN_SIZE until it is. 
-  const int threshold = in_ints * DEVICE_INTTYPE_BITS / 2;
+  const int64_t threshold = in_int64s * 64 / 2;
 
   // start timers
   cudaEvent_t start, stop;
@@ -196,33 +201,39 @@ int main( int argc, char *argv[] )
     at::Tensor w2;
     at::Tensor i2;
     at::Tensor r;
+
+    cudaProfilerStart();
+    
  
-    for (int i = 0; i < 5000; i++) {
+    for (int i = 0; i < 2; i++) {
       auto options =
           torch::TensorOptions()
             .dtype(torch_device_inttype)
             .layout(torch::kStrided)
             .device(torch::kCUDA)
             .requires_grad(false);
-      i1 = torch::randint(minlong,maxlong,{1024,4096,13},options);
-      w1 = torch::randint(minlong,maxlong,{2,1024,13,128},options);
+      i1 = torch::randint(minlong,maxlong,{16,4096,64},options);
+      w1 = torch::randint(minlong,maxlong,{16,64,2,4096},options);
 
       i2 = binary_forward::binary_forward_cuda(
           i1,
           w1,
-          (13*64)/2,
+          (64*64)/2,
           false);
 
-      w2 = torch::randint(minlong,maxlong,{2,1024,2,10},options);
+      //w2 = torch::randint(minlong,maxlong,{2,1024,2,10},options);
 
-      r = binary_forward::binary_forward_cuda(
-          i2,
-          w2,
-          0,
-          false);
-      printOut(r.index({torch::indexing::Slice(-1,torch::indexing::None),torch::indexing::Slice(-1,torch::indexing::None),torch::indexing::Slice()}), false);
-      std::cout << i << std::endl;
+      //r = binary_forward::binary_forward_cuda(
+      //    i2,
+      //    w2,
+      //    0,
+      //    false);
+      //printOut(r.index({torch::indexing::Slice(-1,torch::indexing::None),torch::indexing::Slice(-1,torch::indexing::None),torch::indexing::Slice()}), false);
+      //std::cout << i << std::endl;
     }
+
+    cudaProfilerStop();
+
   }
 
 
@@ -267,14 +278,12 @@ int main( int argc, char *argv[] )
     printOut(d_out_nothresh.to(torch::kCPU), false);
   }
 
-  if (COMPARE_WITH_CPU) {
+  if (COMPARE_THRESHOLD) {
     // start timer
     checkCUDA( cudaEventRecord( start, 0 ) );
-
   
     // do convolution on cpu
     at::Tensor h_out_thresh = binary_forward::host_helper(h_input, h_weight, threshold, verbose);
-    at::Tensor h_out_nothresh = binary_forward::host_helper(h_input, h_weight, 0, verbose);
     //at::Tensor h_out_nothresh = binary_forward::host_helper(h_input, h_weight, threshold);
   
     // stop timers
@@ -289,8 +298,8 @@ int main( int argc, char *argv[] )
   
     // compare GPU implementation results with CPU results
 
-    device_inttype diff1 = torch::sum(torch::abs(h_out_thresh - d_out_thresh.to(torch::kCPU))).item<device_inttype>();
-    device_inttype diff2 = torch::sum(torch::abs(h_out_nothresh - d_out_nothresh.to(torch::kCPU))).item<device_inttype>();
+    int64_t diff1 = torch::sum(torch::abs(h_out_thresh - d_out_thresh.to(torch::kCPU))).item<device_inttype>();
+    printf("Threshold error is %ld\n",diff1);
 
     if (verbose) {
 
@@ -298,18 +307,39 @@ int main( int argc, char *argv[] )
       //printWeight(h_weight);
       std::cout << "Host out:" << std::endl << h_out_thresh << std::endl;
       printOut(h_out_thresh, true);
+    }
+    
+    printf("Threshold error is %ld\n",diff1);
+
+    if( diff1 == 0 ) printf("PASS\n");
+    else printf("FAIL\n");
+
+  }
+
+  if (COMPARE_NOTHRESHOLD) {
+    checkCUDA( cudaEventRecord( start, 0 ) );
+
+    at::Tensor h_out_nothresh = binary_forward::host_helper(h_input, h_weight, 0, verbose);
+    checkCUDA( cudaEventRecord( stop, 0 ) );
+    checkCUDA( cudaEventSynchronize( stop ) );
+
+    // print time taken
+    fprintf(stdout, "Total time CPU is %f sec\n", elapsedTime / 1000.0f );
+    checkCUDA( cudaEventDestroy( start ) );
+    checkCUDA( cudaEventDestroy( stop ) );
+    checkCUDA( cudaEventElapsedTime( &elapsedTime, start, stop ) );
+
+    int64_t diff2 = torch::sum(torch::abs(h_out_nothresh - d_out_nothresh.to(torch::kCPU))).item<device_inttype>();
+    printf("No threshold error is %ld\n",diff2);
+
+    if (verbose) {
       std::cout << "NOTHRESH Host out:" << std::endl;
       printOut(h_out_nothresh, false);
     }
-
-
-    
-    printf("Threshold error is %ld\n",diff1);
     printf("No threshold error is %ld\n",diff2);
 
-    if( diff1 == 0  && diff2 == 0 ) printf("PASS\n");
+    if( diff2 == 0 ) printf("PASS\n");
     else printf("FAIL\n");
-
 
   }
 

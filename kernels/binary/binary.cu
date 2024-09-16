@@ -14,7 +14,7 @@
 
 namespace binary_forward {
 
-__host__ __device__ void printbinary(binary_forward::device_inttype i) {
+__host__ __device__ void printbinary(device_inttype i) {
     printf(BBP BBP BBP BBP "\n", BB(i>>24), BB(i>>16), BB(i>>8), BB(i));
 }
 
@@ -48,8 +48,8 @@ __host__ __device__ intType_t o_ind(const intType_t p, const intType_t b, const 
 
 // note the "o" arg to w_ind should be different than the "o" arg to o_ind above.
 // (because w has a full integer entry for each output bit o)
-__host__ __device__ intType_t w_ind(const intType_t t, const intType_t p, const intType_t i, const intType_t o, const device_inttype population_size, const device_inttype in_ints, const device_inttype out_size) {
-  return t * in_ints * population_size * out_size + p * in_ints * out_size + i * out_size + o;
+__host__ __device__ intType_t w_ind(const intType_t p, const intType_t i, const intType_t t,  const intType_t o, const device_inttype in_ints, const device_inttype out_size) {
+  return p * in_ints * out_size * 2 + i * out_size * 2 + t * out_size + o;
 }
 
 
@@ -82,8 +82,8 @@ void host_op(
         output_inttype temp = 0;
 
         for( intType_t i = 0; i < in_ints; i++) {
-          temp += __builtin_popcountll( (input[i_ind(p,b,i,batch_size,in_ints)] & weight[w_ind(0,p,i,o,population_size,in_ints,out_size)]));
-          temp += __builtin_popcountll((~input[i_ind(p,b,i,batch_size,in_ints)]) & weight[w_ind(1,p,i,o,population_size,in_ints,out_size)]);
+          temp += __builtin_popcountll( (input[i_ind(p,b,i,batch_size,in_ints)] & weight[w_ind(p,i,0,o,in_ints,out_size)]));
+          temp += __builtin_popcountll((~input[i_ind(p,b,i,batch_size,in_ints)]) & weight[w_ind(p,i,1,o,in_ints,out_size)]);
         }
         // NOTE that the way we shift here, the outputs are ordered low-precision bits first
        
@@ -94,7 +94,8 @@ void host_op(
           out[o_ind(p,b,o_int_index,batch_size,out_int32s)] = out[o_ind(p,b,o_int_index,batch_size,out_int32s)] | bit_to_set;
         } else {
           //if (verbose) {printf("Setting output b: %u o: %u temp: %d\n", b, o, temp); };
-          // need to multiple o by 2 since we will eventually convert this back to (device_inttype *) with 64-bit entries.
+          // need to multiple o by 2 since we will eventually convert this back to (int64_t *) 
+          // since that is what pytorch uses
           // (meaning, we only want to set every other 32-bit entry)
           out[o_ind(p,b,2*o,batch_size,out_size*2)] = temp;
         }
@@ -106,14 +107,14 @@ void host_op(
 at::Tensor host_helper(at::Tensor input, at::Tensor weight, int thresh, bool verbose) {
   const unsigned int population_size = input.sizes()[0];
   const unsigned int batch_size = input.sizes()[1];
-  const unsigned int in_ints = input.sizes()[2];
+  const unsigned int in_ints = input.sizes()[2]; // * 2 because input is int64_t tensor, we want number of int32s
   const unsigned int out_size = weight.sizes()[3];
   TORCH_CHECK(input.sizes().size() == 3); // population, batch, input
-  TORCH_CHECK(weight.sizes().size() == 4); // 2, population, input, output
+  TORCH_CHECK(weight.sizes().size() == 4); // population, input, 2, output
   // TODO we shouldn't need this check, need to make kernel work for any batch size etc.
   //TORCH_CHECK(input.sizes()[1] >= 32); 
-  TORCH_CHECK(input.sizes()[0] == weight.sizes()[1]); // check both have same population size
-  TORCH_CHECK(input.sizes()[2] == weight.sizes()[2]); // check both have same input size
+  TORCH_CHECK(input.sizes()[0] == weight.sizes()[0]); // check both have same population size
+  TORCH_CHECK(input.sizes()[2] == weight.sizes()[1]); // check both have same input size
 
   TORCH_CHECK(input.dtype() == torch_device_inttype); 
   TORCH_CHECK(weight.dtype() == torch_device_inttype);
@@ -124,7 +125,7 @@ at::Tensor host_helper(at::Tensor input, at::Tensor weight, int thresh, bool ver
   const device_inttype* weight_ptr = (device_inttype *) weight_contig.data_ptr();
   at::Tensor output;
   auto options = input_contig.options().dtype(torch_device_inttype);
-  const unsigned int out_int64s  = (out_size + DEVICE_INTTYPE_BITS - 1) / DEVICE_INTTYPE_BITS;
+  const unsigned int out_int64s  = (out_size + 63) / 64;
   if (thresh == 0) {
     output = torch::zeros({population_size, batch_size, out_size}, options);
   } else {
@@ -156,8 +157,9 @@ we need to wrap all functionality within if(batch_id < batch_size) checks.
 __global__ void binary_forward(
         device_inttype const * const input, 
         device_inttype const * const weight, 
-        device_inttype * out, 
-        const unsigned int out_tile_y_ints, 
+        int64_t * out, 
+        const unsigned int out_tile_y_size, 
+        const unsigned int out_tile_x_ints, 
         const unsigned int in_ints, 
         const unsigned int warp_size,
         const unsigned int population_size,
@@ -169,64 +171,85 @@ __global__ void binary_forward(
   extern __shared__ device_inttype shared[];
 
   device_inttype* weight_tile{&shared[0]};
-  // TODO replace 32 with a constant or something
-  device_inttype* not_weight_tile{&shared[warp_size * warp_size]};
-  device_inttype* input_tile{&shared[2 * warp_size * warp_size]};
+  device_inttype* not_weight_tile{&shared[warp_size * out_tile_x_ints *  warp_size]};
+  device_inttype* input_tile{&shared[2 * warp_size * out_tile_x_ints * warp_size]};
 
   // TODO distinguish between warp_size and threadblock.y.size
-  const intType_t output_tile_x = blockIdx.x * warp_size;
-  const intType_t output_tile_y = blockIdx.y * warp_size;
-  const intType_t b = output_tile_y + threadIdx.y;
+  const intType_t output_tile_x = blockIdx.x * OUT_TILE_X_MULTIPLICITY * warp_size;
+  const intType_t output_tile_y = blockIdx.y * out_tile_y_size;
 
   const intType_t p = blockIdx.z;
 
-  device_inttype acc = 0;
+  unsigned int acc[OUT_TILE_X_MULTIPLICITY][OUT_TILE_Y_MULTIPLICITY] = { 0 }; // double check this initializes to 0
 
-  for (unsigned int tile_i = 0; tile_i < (in_ints + warp_size - 1) / warp_size; ++tile_i) {
-
-    __syncthreads();
-    intType_t i = tile_i * warp_size + threadIdx.x;
+  for (unsigned int tile_offset = 0; tile_offset < in_ints; tile_offset += warp_size) {
 
     // Load input into shared memory
     //if (threadIdx.x < warp_size) { 
-    if (threadIdx.x < warp_size && b < batch_size && i < in_ints) { 
-      input_tile[threadIdx.y * warp_size + threadIdx.x] = input[i_ind(p,b, i, batch_size, in_ints)]; 
+    for (int input_y_offset = 0; input_y_offset < out_tile_y_size; input_y_offset += blockDim.y) {
+
+      intType_t b = output_tile_y + threadIdx.y + input_y_offset;
+      intType_t i = tile_offset + threadIdx.x; // CORRECT
+
+      if (b < batch_size && i < in_ints) { 
+        //if (verbose && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u setting input\n", threadIdx.x, threadIdx.y);};
+        input_tile[(threadIdx.y + input_y_offset) * warp_size + threadIdx.x] = input[i_ind(p, b, i, batch_size, in_ints)]; 
+      }
     }
-    //if (true) {
+
     // load weight into shared memory
-    intType_t w_i_to_load =  tile_i * warp_size + threadIdx.y;
-    intType_t w_o_to_load = blockIdx.x * warp_size + threadIdx.x;
-    if (w_i_to_load < in_ints) {
-      // "o" varies with threadIdx.x and is the last coord so access is coalesced
-      weight_tile[    threadIdx.y * warp_size +  threadIdx.x] = weight[w_ind(0, p, w_i_to_load, w_o_to_load, population_size, in_ints, out_size)]; 
-      not_weight_tile[threadIdx.y * warp_size +  threadIdx.x] = weight[w_ind(1, p, w_i_to_load, w_o_to_load, population_size, in_ints, out_size)]; 
+    // TODO probably remove this first for loop, it never loops since blockDim.y = warp_size always?
+    //for (int weight_y_offset = 0; weight_y_offset < warp_size; weight_y_offset += blockDim.y) {
+    for (int weight_x_offset = 0; weight_x_offset < OUT_TILE_X_MULTIPLICITY * warp_size; weight_x_offset += warp_size) {
+
+      intType_t w_i_to_load =  tile_offset + threadIdx.y;
+      intType_t w_o_to_load = blockIdx.x * warp_size * OUT_TILE_X_MULTIPLICITY + threadIdx.x + weight_x_offset;
+
+      //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u w_i_to_load: %u in_ints: %u\n", threadIdx.x, threadIdx.y, w_i_to_load, in_ints);};
+      if (w_i_to_load < in_ints && w_o_to_load < out_size) {
+        // "o" varies with threadIdx.x and is the last coord so access is coalesced
+
+        //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u setting shared mem weights w_i_to_load %u w_o_to_load %u \n", threadIdx.x, threadIdx.y, w_i_to_load, w_o_to_load);};
+
+        //weight_tile[    (threadIdx.y + weight_y_offset) * warp_size +  threadIdx.x] = weight[w_ind( p, w_i_to_load,0, w_o_to_load,  in_ints, out_size)]; 
+        //not_weight_tile[(threadIdx.y + weight_y_offset) * warp_size + threadIdx.x] = weight[w_ind( p, w_i_to_load,1, w_o_to_load,  in_ints, out_size)]; 
+
+        weight_tile[threadIdx.y * warp_size * OUT_TILE_X_MULTIPLICITY +  weight_x_offset + threadIdx.x] = weight[w_ind( p, w_i_to_load,0, w_o_to_load,  in_ints, out_size)]; 
+        not_weight_tile[threadIdx.y * warp_size * OUT_TILE_X_MULTIPLICITY + weight_x_offset + threadIdx.x] = weight[w_ind( p, w_i_to_load,1, w_o_to_load,  in_ints, out_size)]; 
+      }
     }
+
 
     __syncthreads(); // wait until shared memory load is finished before continuing with compute
 
     for (unsigned int j = 0; j < warp_size; ++j) {
 
-      //if (true) {
-      //if (verbose && b < 2 && j < 2) {printf("Checking b %u < batch_size %u and j %u + tile_i %u * 32 < in_ints %u\n",b,batch_size,j,tile_i,in_ints);};
+      // read shared memory into registers
+      device_inttype input_regs[OUT_TILE_Y_MULTIPLICITY];
+      device_inttype weight_regs[OUT_TILE_X_MULTIPLICITY];
+      device_inttype not_weight_regs[OUT_TILE_X_MULTIPLICITY];
+      for (unsigned int yi = 0; yi < OUT_TILE_Y_MULTIPLICITY; yi += 1) {
+        input_regs[yi] = input_tile[yi * warp_size * blockDim.y + threadIdx.y * warp_size  + j];
+      }
+      for (unsigned int xi = 0; xi < OUT_TILE_X_MULTIPLICITY; xi += 1) {
+        weight_regs[xi] = weight_tile[j * (warp_size * OUT_TILE_X_MULTIPLICITY) + xi * warp_size + threadIdx.x];
+        not_weight_regs[xi] = not_weight_tile[j * (warp_size * OUT_TILE_X_MULTIPLICITY) + xi * warp_size + threadIdx.x];
+      }
         
-      // Note that we will be computing this section for some invalid outputs,
-      // but we jsut don't write them into out[] in the final if statement 
-      if (b < batch_size && (j + tile_i * warp_size < in_ints)) {
-        //device_inttype tmp = acc + 0;
+      // Do compute
+      for (unsigned int xi = 0; xi < OUT_TILE_X_MULTIPLICITY; xi += 1) {
+        for (unsigned int yi = 0; yi < OUT_TILE_Y_MULTIPLICITY; yi += 1) {
 
-        acc += __popcll(input_tile[threadIdx.y * warp_size + j] & weight_tile[j * warp_size + threadIdx.x]);
-        //device_inttype d1 = acc - tmp;
-        acc += __popcll((~input_tile[threadIdx.y * warp_size + j]) & not_weight_tile[j * warp_size + threadIdx.x]);
-        //device_inttype d2 = acc - tmp - d1;
-        //if (verbose) {printf("tmp: %ld, acc: %ld, d1: %ld, d2: %ld, x: %u, y: %u, b: %u\n", tmp, acc, d1, d2, threadIdx.x, threadIdx.y, b);};
-        //if (verbose) {printf("b: %u, x:%u y:%u j:%u Added d1: %ld and d2: %ld to acc to get acc %ld\n", b, threadIdx.x, threadIdx.y, j, d1, d2, acc);};
-        //if (verbose) {printf("b: %u, x: %u, y: %u, j: %u, ~input_tile[threadIdx.y * warp_size + j]: %ld, not_weight_tile[j*warp_size + threadIdx.x]: %ld\n", b, threadIdx.x, threadIdx.y, j, ~input_tile[threadIdx.y * warp_size + j], not_weight_tile[j * warp_size + threadIdx.x]);};
-        //if (verbose) {
-        //  std::cout << "b: " << b << "x:" << threadIdx.x << "y: " << threadIdx.y << "j: " << "d1: " << d1 << "d2: " << d2 << "acc: " << acc << std::endl;
-        //}
+          intType_t b = output_tile_y + yi * blockDim.y + threadIdx.y;
+          intType_t o = output_tile_x + xi * warp_size + threadIdx.x;
 
-          //printf("acc: %d, b: %u, x:%u y:%u j:%u Added d1: %d and d2: %d to acc to get acc %d\n", acc, b, threadIdx.x, threadIdx.y, j, d1, d2, acc);};
-        //if (verbose) {printf("ACC:%d\n", acc);};
+          if (b < batch_size && (j + tile_offset < in_ints) && o < out_size) { // TODO double check?
+            acc[xi][yi] += __popcll((input_regs[yi] & weight_regs[xi]) | (~input_regs[yi] & not_weight_regs[xi]));
+
+            //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u adding to acc: %u \n" , threadIdx.x, threadIdx.y, j, acc - tmp);};
+
+          } 
+        }
       }
     }
     
@@ -234,8 +257,17 @@ __global__ void binary_forward(
 
   }
   //if (true) { 
-  if (b < batch_size && output_tile_x + threadIdx.x < out_size) { 
-    out[o_ind(p,b,output_tile_x + threadIdx.x,batch_size,out_size)] = acc;
+
+  for (unsigned int xi = 0; xi < OUT_TILE_X_MULTIPLICITY; xi += 1) {
+    for (unsigned int yi = 0; yi < OUT_TILE_Y_MULTIPLICITY; yi += 1) {
+
+      intType_t b = output_tile_y + yi * blockDim.y + threadIdx.y;
+      intType_t o = output_tile_x + xi * blockDim.x + threadIdx.x;
+
+      if (b < batch_size && o < out_size) { 
+        out[o_ind(p,b,o,batch_size,out_size)] = acc[xi][yi];
+      }
+    }
   }
 }
 
@@ -244,7 +276,8 @@ __global__ void binary_forward_with_threshold(
         device_inttype const * const weight, 
         output_inttype * out, 
         const unsigned int thresh, 
-        const unsigned int out_tile_y_ints, 
+        const unsigned int out_tile_y_size, 
+        const unsigned int out_tile_x_ints, 
         const unsigned int in_ints, 
         const unsigned int warp_size,
         const unsigned int population_size,
@@ -256,117 +289,139 @@ __global__ void binary_forward_with_threshold(
   extern __shared__ device_inttype shared[];
 
   device_inttype* weight_tile{&shared[0]};
-  // TODO replace 32 with a constant or something
-  device_inttype* not_weight_tile{&shared[warp_size * warp_size]};
-  device_inttype* input_tile{&shared[2 * warp_size * warp_size]};
+  device_inttype* not_weight_tile{&shared[warp_size * out_tile_x_ints * warp_size]};
+  device_inttype* input_tile{&shared[2 * warp_size * out_tile_x_ints * warp_size]};
 
-  const intType_t output_tile_x = blockIdx.x;
-  const intType_t output_tile_y = blockIdx.y * out_tile_y_ints;
-  const intType_t b = output_tile_y + threadIdx.y;
+  const intType_t output_tile_x = blockIdx.x * OUT_TILE_X_MULTIPLICITY;
+  const intType_t output_tile_y = blockIdx.y * out_tile_y_size;
+
   const unsigned int out_int32s = out_size / OUTPUT_INTTYPE_BITS;
 
   const intType_t p = blockIdx.z;
 
-  unsigned int acc = 0;
+  //unsigned int acc[out_tile_x_ints][out_tile_y_size / blockDim.y] = { 0 }; // double check this initializes to 0
+  unsigned int acc[OUT_TILE_X_MULTIPLICITY][OUT_TILE_Y_MULTIPLICITY] = { 0 }; // double check this initializes to 0
 
   
-  for (unsigned int tile_i = 0; tile_i < (in_ints + warp_size - 1) / warp_size; ++tile_i) {
-
-    intType_t i = tile_i * warp_size + threadIdx.x;
+  for (unsigned int tile_offset = 0; tile_offset < in_ints; tile_offset += warp_size) {
 
     // Load input into shared memory
     //if (threadIdx.x < warp_size) { 
-    if (threadIdx.x < warp_size &&  b < batch_size && i < in_ints) { 
-      //if (verbose && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u setting input\n", threadIdx.x, threadIdx.y);};
-      input_tile[threadIdx.y * warp_size + threadIdx.x] = input[i_ind(p, b, i, batch_size, in_ints)]; 
+    for (int input_y_offset = 0; input_y_offset < out_tile_y_size; input_y_offset += blockDim.y) {
+
+      intType_t b = output_tile_y + threadIdx.y + input_y_offset;
+      intType_t i = tile_offset + threadIdx.x; // CORRECT
+
+      if (b < batch_size && i < in_ints) { 
+        //if (verbose && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u setting input\n", threadIdx.x, threadIdx.y);};
+        input_tile[(threadIdx.y + input_y_offset) * warp_size + threadIdx.x] = input[i_ind(p, b, i, batch_size, in_ints)]; 
+      }
     }
 
-    //if (true) {
     // load weight into shared memory
-    intType_t w_i_to_load =  tile_i * warp_size + threadIdx.y;
-    // TODO need to set output integers to be 32 bits and the rest to be 64 
-    intType_t w_o_to_load = blockIdx.x * warp_size + threadIdx.x;
+    // TODO probably remove this first for loop, it never loops since blockDim.y = warp_size always?
+    //for (int weight_y_offset = 0; weight_y_offset < warp_size; weight_y_offset += blockDim.y) {
+    for (int weight_x_offset = 0; weight_x_offset < OUT_TILE_X_MULTIPLICITY * warp_size; weight_x_offset += warp_size) {
 
-    //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u w_i_to_load: %u in_ints: %u\n", threadIdx.x, threadIdx.y, w_i_to_load, in_ints);};
-    if (w_i_to_load < in_ints) {
-      // "o" varies with threadIdx.x and is the last coord so access is coalesced
+      intType_t w_i_to_load =  tile_offset + threadIdx.y;
+      intType_t w_o_to_load = blockIdx.x * warp_size * OUT_TILE_X_MULTIPLICITY + threadIdx.x + weight_x_offset;
 
-      //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u setting shared mem weights w_i_to_load %u w_o_to_load %u \n", threadIdx.x, threadIdx.y, w_i_to_load, w_o_to_load);};
+      //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u w_i_to_load: %u in_ints: %u\n", threadIdx.x, threadIdx.y, w_i_to_load, in_ints);};
+      if (w_i_to_load < in_ints && w_o_to_load < out_size) {
+        // "o" varies with threadIdx.x and is the last coord so access is coalesced
 
-      weight_tile[    threadIdx.y * warp_size +  threadIdx.x] = weight[w_ind(0, p, w_i_to_load, w_o_to_load, population_size, in_ints, out_size)]; 
-      not_weight_tile[threadIdx.y * warp_size +  threadIdx.x] = weight[w_ind(1, p, w_i_to_load, w_o_to_load, population_size, in_ints, out_size)]; 
+        //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("threadIdx.x %u threadIdx.y %u setting shared mem weights w_i_to_load %u w_o_to_load %u \n", threadIdx.x, threadIdx.y, w_i_to_load, w_o_to_load);};
+
+        //weight_tile[    (threadIdx.y + weight_y_offset) * warp_size +  threadIdx.x] = weight[w_ind( p, w_i_to_load,0, w_o_to_load,  in_ints, out_size)]; 
+        //not_weight_tile[(threadIdx.y + weight_y_offset) * warp_size + threadIdx.x] = weight[w_ind( p, w_i_to_load,1, w_o_to_load,  in_ints, out_size)]; 
+
+        weight_tile[threadIdx.y * warp_size * OUT_TILE_X_MULTIPLICITY +  weight_x_offset + threadIdx.x] = weight[w_ind( p, w_i_to_load,0, w_o_to_load,  in_ints, out_size)]; 
+        not_weight_tile[threadIdx.y * warp_size * OUT_TILE_X_MULTIPLICITY + weight_x_offset + threadIdx.x] = weight[w_ind( p, w_i_to_load,1, w_o_to_load,  in_ints, out_size)]; 
+      }
     }
+
 
     __syncthreads(); // wait until shared memory load is finished before continuing with compute
 
+
     for (unsigned int j = 0; j < warp_size; ++j) {
 
-      //if (true) {
-      
-      //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u, j:%u,  j+tile_i*warp_size:%u \n" , threadIdx.x, threadIdx.y, j, j + tile_i * warp_size);};
+      // read shared memory into registers
+      device_inttype input_regs[OUT_TILE_Y_MULTIPLICITY];
+      device_inttype weight_regs[OUT_TILE_X_MULTIPLICITY];
+      device_inttype not_weight_regs[OUT_TILE_X_MULTIPLICITY];
+      for (unsigned int yi = 0; yi < OUT_TILE_Y_MULTIPLICITY; yi += 1) {
+        input_regs[yi] = input_tile[yi * warp_size * blockDim.y + threadIdx.y * warp_size  + j];
+      }
+      for (unsigned int xi = 0; xi < OUT_TILE_X_MULTIPLICITY; xi += 1) {
+        weight_regs[xi] = weight_tile[j * (warp_size * OUT_TILE_X_MULTIPLICITY) + xi * warp_size + threadIdx.x];
+        not_weight_regs[xi] = not_weight_tile[j * (warp_size * OUT_TILE_X_MULTIPLICITY) + xi * warp_size + threadIdx.x];
+      }
+        
+      // Do compute
+      for (unsigned int xi = 0; xi < OUT_TILE_X_MULTIPLICITY; xi += 1) {
+        for (unsigned int yi = 0; yi < OUT_TILE_Y_MULTIPLICITY; yi += 1) {
 
-      if (b < batch_size && (j + tile_i * warp_size < in_ints)) { // TODO double check?
+          intType_t b = output_tile_y + yi * blockDim.y + threadIdx.y;
+          intType_t o = output_tile_x + xi * warp_size + threadIdx.x;
 
-        //device_inttype x1 = input_tile[threadIdx.y * warp_size + j];
-        //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: input_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
+          if (b < batch_size && (j + tile_offset < in_ints) && o < out_size) { // TODO double check?
+            acc[xi][yi] += __popcll((input_regs[yi] & weight_regs[xi]) | (~input_regs[yi] & not_weight_regs[xi]));
 
-        //x1 = weight_tile[j * warp_size + threadIdx.x];
-        //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: weight_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
-        //x1 = not_weight_tile[j * warp_size + threadIdx.x];
-        //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u: not_weight_tile[...]: " BBP BBP BBP BBP "\n", threadIdx.x, threadIdx.y, j, BB(x1>>24), BB(x1>>16), BB(x1>>8), BB(x1));};
+            //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u adding to acc: %u \n" , threadIdx.x, threadIdx.y, j, acc - tmp);};
 
-        //unsigned int tmp = acc;
-
-        acc += __popcll(input_tile[threadIdx.y * warp_size + j] & weight_tile[j * warp_size + threadIdx.x]);
-        acc += __popcll((~input_tile[threadIdx.y * warp_size + j]) & not_weight_tile[j * warp_size + threadIdx.x]);
-
-        //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u j:%u adding to acc: %u \n" , threadIdx.x, threadIdx.y, j, acc - tmp);};
-
-      } 
+          } 
+        }
+      }
     }
+    
+    __syncthreads(); // wait until this compute is finished before next loop replaces shared memory
     
     __syncthreads(); // wait until this compute is finished before next loop replaces shared memory
 
   }
 
-  __syncthreads(); // TODO I dont think we need this
 
   //if (verbose && blockIdx.x == 1 && threadIdx.x < 3 && threadIdx.y < 1) {printf("%u.%u acc:%u:\n" , threadIdx.x, threadIdx.y, acc);};
 
-  // activemask will always be 1111..., TODO 
-  unsigned int r = __ballot_sync(__activemask(), acc >= thresh);
-  // after ballot_sync, only one thread per warp needs to write to output
-  //if (threadIdx.x % warp_size == 0) {
-  if (threadIdx.x % warp_size == 0 && b < batch_size) {
-    out[o_ind(p,b,output_tile_x,batch_size,out_int32s)] = r;
+  for (unsigned int xi = 0; xi < OUT_TILE_X_MULTIPLICITY; xi += 1) {
+    for (unsigned int yi = 0; yi < OUT_TILE_Y_MULTIPLICITY; yi += 1) {
+
+      intType_t b = output_tile_y + yi * blockDim.y + threadIdx.y;
+      intType_t o_int = output_tile_x + xi;
+
+      //unsigned int r = __ballot_sync(__activemask(), acc >= thresh);
+      unsigned int r = __ballot_sync(-1, acc[xi][yi] >= thresh); // TODO fix -1 type conversion warning
+      // after ballot_sync, only one thread per warp needs to write to output
+      //if (threadIdx.x % warp_size == 0) {
+      if (threadIdx.x % warp_size == 0 && b < batch_size && o_int < out_int32s) {
+        out[o_ind(p,b,o_int,batch_size,out_int32s)] = r;
+      }
+    }
   }
-  __syncthreads(); // TODO I dont think we need this
 }
 
 
 at::Tensor binary_forward_cuda(
         const at::Tensor& input, 
         const at::Tensor& weight, 
-        const device_inttype thresh,
+        const int64_t thresh,
         const bool verbose
         ) {
 
 
   const unsigned int population_size = input.sizes()[0];
   const unsigned int batch_size = input.sizes()[1];
-  const unsigned int in_ints = input.sizes()[2];
+  const unsigned int in_ints = input.sizes()[2]; // * 2 because input is an int64 tensor, and we want to count the int32s
   const unsigned int out_size = weight.sizes()[3];
   
   TORCH_CHECK(input.sizes().size() == 3); // population, batch, input
-  TORCH_CHECK(weight.sizes().size() == 4); // 2, population, input, output
+  TORCH_CHECK(weight.sizes().size() == 4); // population, input, 2, output
 
-  TORCH_CHECK(weight.sizes()[0] == 2); // 2, population, input, output
+  TORCH_CHECK(weight.sizes()[2] == 2); // population, input, 2, output
 
-  // TODO we shouldn't need this check, need to make kernel work for any batch size etc.
-  //TORCH_CHECK(input.sizes()[1] >= 32); 
-
-  TORCH_CHECK(input.sizes()[0] == weight.sizes()[1]); // check both have same population size
-  TORCH_CHECK(input.sizes()[2] == weight.sizes()[2]); // check both have same input size
+  TORCH_CHECK(input.sizes()[0] == weight.sizes()[0]); // check both have same population size
+  TORCH_CHECK(input.sizes()[2] == weight.sizes()[1]); // check both have same input size
 
   TORCH_CHECK(input.dtype() == torch_device_inttype); 
   TORCH_CHECK(weight.dtype() == torch_device_inttype);
@@ -377,50 +432,50 @@ at::Tensor binary_forward_cuda(
   at::Tensor input_contig = input.contiguous();
   at::Tensor weight_contig = weight.contiguous();
 
-
-  // TODO can we have result be shaped correctly or does it have to be contiguous?
-  //unsigned int output_tensor_size[1] = {population_size*batch_size*out_size};
-  //unsigned int output_tensor_size_array_ref = ArrayRef(&output_tensor_size, 1);
-
   const device_inttype* input_ptr = (device_inttype *) input_contig.data_ptr();
   const device_inttype* weight_ptr = (device_inttype *) weight_contig.data_ptr();
 
+  const unsigned int out_tile_y_size = OUT_TILE_Y_MULTIPLICITY * 32; 
+  const unsigned int out_tile_x_ints = OUT_TILE_X_MULTIPLICITY; 
   const dim3 threads(32, 32, 1); 
-  const unsigned int out_tile_y_ints = 32; // keep as warp size
 
   const unsigned int warp_size = 32;
-  const unsigned int sharedMemSize = DEVICE_INTTYPE_BYTES * (((warp_size * out_tile_y_ints) + 2 * (warp_size * warp_size))); 
+  const unsigned int sharedMemSize = DEVICE_INTTYPE_BYTES * (((warp_size * out_tile_y_size) + 2 * (warp_size * warp_size * out_tile_x_ints))); 
 
   at::Tensor output;
 
-  const unsigned int out_int64s  = (out_size + DEVICE_INTTYPE_BITS - 1) / DEVICE_INTTYPE_BITS;
+  const unsigned int out_int64s  = (out_size + 63) / 64;
   const unsigned int out_int32s  = out_int64s * 2;
   // out_ints * 2 because out_ints is with respect to 64-bit precision, whereas the output at the kernel
-  // level is 32-bit precision, see below comment as well
-  const dim3 blocks(out_int32s, (batch_size + out_tile_y_ints - 1) / out_tile_y_ints, population_size);
-  // TODO clarify "out_ints", it is still confusing 64 bit vs 32 bit sometimes
+  // level is 32-bit precision, see below comment as well TODO update comment
+  const dim3 blocks((out_int32s + out_tile_x_ints - 1) / out_tile_x_ints, (batch_size + out_tile_y_size - 1) / out_tile_y_size, population_size);
+
 
   //printf("Checking thresh");
   if (thresh > 0) {
 
-      // note that the tensor is created with 64-bit precisions here,
+      // note that the tensor is created with 64-bit precisions here, TODO update comment
       // because pytorch expects integer tensors to have 64-bit precision,
       // but the data pointer will be cast to 32-bit precisions when sent to the kernel.
       // This is because outputs are generated one bit per warp and collected with __ballot_sync,
       // so we need the output to have 32-bit precision.
       auto options = input_contig.options().dtype(torch_device_inttype);
 
-      output = torch::empty({population_size, batch_size, out_int64s}, options);
+      output = torch::zeros({population_size, batch_size, out_int64s}, options);
       output_inttype* output_ptr = (output_inttype *) output.data_ptr();
 
       //printf("Calling binary forward with threshold...");
 
+
+      int maxbytes = 65536; // TODO is this actually necessary
+      cudaFuncSetAttribute(binary_forward_with_threshold, cudaFuncAttributeMaxDynamicSharedMemorySize, maxbytes);
       binary_forward_with_threshold<<<blocks, threads, sharedMemSize>>>(
               input_ptr, 
               weight_ptr, 
               output_ptr, 
               thresh,
-              out_tile_y_ints,
+              out_tile_y_size,
+              out_tile_x_ints,
               in_ints,
               warp_size,
               population_size,
@@ -433,14 +488,18 @@ at::Tensor binary_forward_cuda(
       // I think the output has to be torch::kInt64, TODO investigate
       auto options = input_contig.options().dtype(torch_device_inttype); 
       output = torch::zeros({population_size, batch_size, out_size}, options);
-      device_inttype* output_ptr = (device_inttype*) output.data_ptr();
+      int64_t* output_ptr = (int64_t*) output.data_ptr();
+
+      int maxbytes = 65536;
+      cudaFuncSetAttribute(binary_forward, cudaFuncAttributeMaxDynamicSharedMemorySize, maxbytes);
 
       //printf("Calling binary forward...");
       binary_forward<<<blocks, threads, sharedMemSize>>>(
               input_ptr, 
               weight_ptr, 
               output_ptr, 
-              out_tile_y_ints,
+              out_tile_y_size,
+              out_tile_x_ints,
               in_ints,
               warp_size,
               population_size,

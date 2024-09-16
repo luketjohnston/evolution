@@ -16,7 +16,8 @@
 #define  torch_device_inttype torch::kInt64
 #define  torch_output_inttype torch::kInt32
 
-const bool COMPARE_WITH_CPU{true};
+const bool COMPARE_THRESHOLD{true};
+const bool COMPARE_NOTHRESHOLD{true};
 const bool STRESS_TEST{true};
 const unsigned int BATCH_SIZE{1}; // TODO should we make threads be max of batch_size and 32?
 const unsigned int POPULATION_SIZE{2};
@@ -156,6 +157,9 @@ int main( int argc, char *argv[] )
   fprintf(stdout, "Population size is %d\n",population_size);
   fprintf(stdout, "sizeof(int)%lu\n",sizeof(int));
   fprintf(stdout, "sizeof(device_inttype)%lu\n",sizeof(device_inttype));
+  
+  fprintf(stdout, "X multiplicity is %d\n", binary_forward::OUT_TILE_X_MULTIPLICITY);
+  fprintf(stdout, "Y multiplicity is %d\n", binary_forward::OUT_TILE_Y_MULTIPLICITY);
   std::cout << "Verbose is: " << verbose << std::endl;
 
   auto options =
@@ -274,14 +278,12 @@ int main( int argc, char *argv[] )
     printOut(d_out_nothresh.to(torch::kCPU), false);
   }
 
-  if (COMPARE_WITH_CPU) {
+  if (COMPARE_THRESHOLD) {
     // start timer
     checkCUDA( cudaEventRecord( start, 0 ) );
-
   
     // do convolution on cpu
     at::Tensor h_out_thresh = binary_forward::host_helper(h_input, h_weight, threshold, verbose);
-    at::Tensor h_out_nothresh = binary_forward::host_helper(h_input, h_weight, 0, verbose);
     //at::Tensor h_out_nothresh = binary_forward::host_helper(h_input, h_weight, threshold);
   
     // stop timers
@@ -298,8 +300,6 @@ int main( int argc, char *argv[] )
 
     int64_t diff1 = torch::sum(torch::abs(h_out_thresh - d_out_thresh.to(torch::kCPU))).item<device_inttype>();
     printf("Threshold error is %ld\n",diff1);
-    int64_t diff2 = torch::sum(torch::abs(h_out_nothresh - d_out_nothresh.to(torch::kCPU))).item<device_inttype>();
-    printf("No threshold error is %ld\n",diff2);
 
     if (verbose) {
 
@@ -307,18 +307,39 @@ int main( int argc, char *argv[] )
       //printWeight(h_weight);
       std::cout << "Host out:" << std::endl << h_out_thresh << std::endl;
       printOut(h_out_thresh, true);
+    }
+    
+    printf("Threshold error is %ld\n",diff1);
+
+    if( diff1 == 0 ) printf("PASS\n");
+    else printf("FAIL\n");
+
+  }
+
+  if (COMPARE_NOTHRESHOLD) {
+    checkCUDA( cudaEventRecord( start, 0 ) );
+
+    at::Tensor h_out_nothresh = binary_forward::host_helper(h_input, h_weight, 0, verbose);
+    checkCUDA( cudaEventRecord( stop, 0 ) );
+    checkCUDA( cudaEventSynchronize( stop ) );
+
+    // print time taken
+    fprintf(stdout, "Total time CPU is %f sec\n", elapsedTime / 1000.0f );
+    checkCUDA( cudaEventDestroy( start ) );
+    checkCUDA( cudaEventDestroy( stop ) );
+    checkCUDA( cudaEventElapsedTime( &elapsedTime, start, stop ) );
+
+    int64_t diff2 = torch::sum(torch::abs(h_out_nothresh - d_out_nothresh.to(torch::kCPU))).item<device_inttype>();
+    printf("No threshold error is %ld\n",diff2);
+
+    if (verbose) {
       std::cout << "NOTHRESH Host out:" << std::endl;
       printOut(h_out_nothresh, false);
     }
-
-
-    
-    printf("Threshold error is %ld\n",diff1);
     printf("No threshold error is %ld\n",diff2);
 
-    if( diff1 == 0  && diff2 == 0 ) printf("PASS\n");
+    if( diff2 == 0 ) printf("PASS\n");
     else printf("FAIL\n");
-
 
   }
 

@@ -35,6 +35,9 @@ const int DEVICE_INTTYPE_BYTES{sizeof(device_inttype)};
 typedef int32_t output_inttype;
 const int OUTPUT_INTTYPE_BITS{sizeof(output_inttype) * 8};
 
+const int OUT_TILE_X_MULTIPLICITY{4};
+const int OUT_TILE_Y_MULTIPLICITY{8};
+
 
 
 

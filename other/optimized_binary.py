@@ -1,4 +1,5 @@
 import numpy as np
+import random
 import torch
 import torch.nn as nn
 from test import print_binarized
@@ -31,37 +32,40 @@ class EvoBinarizedLayerOptimized(nn.Module):
         if activation == 'const':
           self.thresh = self.rounded_in_features // 2 + 1 # kernel uses >= for thresholding
 
-    def next_generation(self, population_size: int, lr=-1):
+    def next_generation(self, population_size: int, lr=-1, mutate=True):
         device = self.w.device
         #print('in next generation,  self w at beginning:', self.w)
         assert lr==-1
 
         _, in_features, _, out_features = self.w.size()
-    
-        i0 = torch.arange(population_size, device=device)
-        i1 = torch.randint(in_features, size=(population_size,), device=device)
-        i2 = torch.randint(2, size=(population_size,), device=device)
-        i3 = torch.randint(out_features, size=(population_size,), device=device)
-
-        # I used to put all these into one tuple called "indices" and it just would
-        # NOT work, idk why, maybe nn.Module uses indices under the hood for something?
-        self.i0 = i0.clone()
-        self.i1 = i1.clone()
-        self.i2 = i2.clone()
-        self.i3 = i3.clone()
 
         self.w = self.w[0:1,:,:,:].repeat([population_size,1,1,1])
 
-        rand_exponents = torch.randint(low=0,high=63,size=self.w[i0,i1,i2,i3].size(), device=self.w.device, dtype=torch.int64);
-        bits_to_flip = torch.pow(2, rand_exponents) # TODO replace this with left shift?
-        self.bits_to_flip = bits_to_flip
+        if mutate:
+    
+            i0 = torch.arange(population_size, device=device)
+            i1 = torch.randint(in_features, size=(population_size,), device=device)
+            i2 = torch.randint(2, size=(population_size,), device=device)
+            i3 = torch.randint(out_features, size=(population_size,), device=device)
+
+            # I used to put all these into one tuple called "indices" and it just would
+            # NOT work, idk why, maybe nn.Module uses indices under the hood for something?
+            self.i0 = i0.clone()
+            self.i1 = i1.clone()
+            self.i2 = i2.clone()
+            self.i3 = i3.clone()
 
 
-        if self.elite: 
-            i0,i1,i2,i3 = i0[1:], i1[1:], i2[1:], i3[1:]
-            bits_to_flip = bits_to_flip[1:]
+            rand_exponents = torch.randint(low=0,high=63,size=self.w[i0,i1,i2,i3].size(), device=self.w.device, dtype=torch.int64);
+            bits_to_flip = torch.pow(2, rand_exponents) # TODO replace this with left shift?
+            self.bits_to_flip = bits_to_flip
 
-        self.w[i0,i1,i2,i3] = torch.bitwise_xor(self.w[i0,i1,i2,i3], bits_to_flip)
+
+            if self.elite: 
+                i0,i1,i2,i3 = i0[1:], i1[1:], i2[1:], i3[1:]
+                bits_to_flip = bits_to_flip[1:]
+
+            self.w[i0,i1,i2,i3] = torch.bitwise_xor(self.w[i0,i1,i2,i3], bits_to_flip)
 
 
 
@@ -153,9 +157,11 @@ class EvoBinarizedOptimized(nn.Module):
         return x ** self.temperature
 
     def next_generation(self, population_size: int, lr: float):
-        for m in self.modules():
-            if isinstance(m, EvoBinarizedLayerOptimized):
-                m.next_generation(population_size, lr)
+
+        layer_to_mutate = random.randrange(len(self.layers))
+
+        for i,m in enumerate(self.layers):
+            m.next_generation(population_size, lr, mutate=(i==layer_to_mutate))
 
     def mate(self, parents, **kwargs):
         for m in self.modules():

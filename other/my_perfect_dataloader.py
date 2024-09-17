@@ -98,17 +98,11 @@ class SyncMPD():
               
           yield xi,yi
 
-if __name__ == '__main__':
-    mpd = MPD(1000, 1, 1, 'mps')
-    for x,y in mpd:
-      print(x.shape)
-      print(y.shape)
-
 
 class BinarizedMnistDataloader():
     def __init__(self, device, train):
     
-        x, y = get_all_binarized_mnist(train=train)
+        x, y = get_all_binarized_mnist_2(train=train)
 
         self.x = torch.tensor(x).to(device)
         self.y = torch.tensor(y).to(device)
@@ -131,7 +125,19 @@ class BinarizedMnistDataloader():
 # 
 #   x = np.frombuffer(np.packbits(x,bitorder='big').data, dtype=dt)
 #   return x
-    
+
+def get_all_binarized_mnist_2(train=False):
+  if train:
+    ds = datasets.MNIST('./data/mnist', train=True, download=False)
+  else:
+    ds = datasets.MNIST('./data/mnist', train=False, download=False)
+  y = ds.targets
+  x = ds.data
+
+  x = x.view((*x.shape[:-2], -1)).numpy() # flatten
+  x = x.view(np.int64) 
+  
+  return x,y
 
 def get_all_binarized_mnist(train=False):
   transform=transforms.Compose([
@@ -145,7 +151,6 @@ def get_all_binarized_mnist(train=False):
   y = ds.targets
   x = ds.data
 
-  x = x > 0.5 # convert input to binary
   x = x.view((*x.shape[:-2], -1)) # flatten
   
   return binarize_helper1(x),y
@@ -167,5 +172,9 @@ def binarize_helper1(x):
   return x
     
     
+if __name__ == '__main__':
+  x,y = get_all_binarized_mnist_2(train=True)
+
+
     
     

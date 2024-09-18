@@ -110,12 +110,26 @@ class EvoBinarizedLayerOptimized(nn.Module):
     def reset(self):
         self.w = self.w[0:1,:,:,:]
 
-    def forward(self, x):
+    def forward(self, x, show_dead=False):
         #print("Forwarding x with shape ", x.shape) # these look fine
 
         if self.activation == 'none':
           # when called with threshold == 0, returns the integer activations
           r = torch.ops.binary_forward.binary_forward_cuda(x, self.w, 0, False)
+
+          if show_dead:
+               print("Reduction with or: 0s are always 0:")
+               a1 = r.numpy().bitwise_or.reduce(axis=1))
+               total_always_zero = np.sum( (1 - np.unpackbits(a1.view(np.uint8))), axis=1)
+               print("Total that are always 0: ",  total_always_zero)
+
+               print("Reduction with and: 1s are always 1:")
+               a2 = r.numpy().bitwise_and.reduce(axis=1)
+               total_always_one = np.sum( (np.unpackbits(a2.view(np.uint8))), axis=1)
+               print("Total that are always 1: ",  total_always_one)
+               print(f"Fraction dead: {total_always_zero} + {total_always_one} / {a2.shape} = {total_always_zero + total_always_one / a2.shape[1]}")
+
+              
           return r
         elif self.activation == 'const':
           r = torch.ops.binary_forward.binary_forward_cuda(x, self.w, self.thresh, True)

@@ -129,7 +129,7 @@ class EvoBinarizedLayerOptimized(nn.Module):
 
 
 class EvoBinarizedOptimized(nn.Module):
-    def __init__(self, input_size = 28*28, hidden_size = 4096, output_size=10, temperature = 0.8, elite=True, layers=1, activation='const'):
+    def __init__(self, input_size = 28*28*8, hidden_size = 4096, output_size=10, temperature = 0.8, elite=True, layers=1, activation='const'):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size

@@ -18,7 +18,10 @@
 
 const bool COMPARE_THRESHOLD{true};
 const bool COMPARE_NOTHRESHOLD{true};
-const bool STRESS_TEST{true};
+const bool STRESS_TEST{false};
+const bool TEST_CONSOLIDATE{true};
+const bool TEST_NOTHRESH_CONSOLIDATE{true};
+
 const unsigned int BATCH_SIZE{1}; // TODO should we make threads be max of batch_size and 32?
 const unsigned int POPULATION_SIZE{2};
 // IN_SIZE must be large enough for a full warp to load integers into memory.
@@ -26,7 +29,7 @@ const unsigned int POPULATION_SIZE{2};
 const unsigned int IN_SIZE{64}; // in bits
 const unsigned int OUT_SIZE{64}; // in bits
 
-const int DEVICE_INTTYPE_BITS = 32;
+const int DEVICE_INTTYPE_BITS = binary_forward::DEVICE_INTTYPE_BYTES * 8;
 
 typedef binary_forward::device_inttype device_inttype;
 typedef binary_forward::output_inttype output_inttype;
@@ -172,17 +175,23 @@ int main( int argc, char *argv[] )
 
   const device_inttype maxlong = std::numeric_limits<device_inttype>::max();
   const device_inttype minlong = std::numeric_limits<device_inttype>::min();
+  printf("HERE A\n");
 
 
   const at::Tensor h_input = torch::randint(minlong,maxlong,{population_size,batch_size,in_int64s},options);
   const at::Tensor h_weight = torch::randint(minlong,maxlong,{population_size,in_int64s,2,out_size},options);
 
+  printf("HERE B\n");
   const at::Tensor d_input = h_input.to(torch::kCUDA);
   const at::Tensor d_weight = h_weight.to(torch::kCUDA);
+
+  printf("HERE C\n");
 
   // Note this is different than IN_SIZE / 2 because when IN_SIZE is not divisible
   // by DEVICE_INTTYPE_BITS, we add extend IN_SIZE until it is. 
   const int64_t threshold = in_int64s * 64 / 2;
+
+  printf("HERE D\n");
 
   // start timers
   cudaEvent_t start, stop;
@@ -190,10 +199,73 @@ int main( int argc, char *argv[] )
   checkCUDA( cudaEventCreate( &stop ) );
   checkCUDA( cudaEventRecord( start, 0 ) );
 
+  printf("HERE E\n");
+
+  float elapsedTime;
 
   /////////
   // GPU //
   /////////
+  printf("HERE F");
+
+  if (TEST_CONSOLIDATE) {
+    printf("YAY HERE 1\n");
+
+    auto options =
+        torch::TensorOptions()
+          .dtype(torch_device_inttype)
+          .layout(torch::kStrided)
+          .device(torch::kCPU)
+          .requires_grad(false);
+    printf("YAY HERE 2\n");
+    const at::Tensor consolidate_h_input1 = torch::randint(-256,256,{2,4096,128},options);
+    printf("Made h input1\n");
+    const at::Tensor consolidate_d_input1 = consolidate_h_input1.to(torch::kCUDA);
+    printf("Made d input1\n");
+
+    //checkCUDA( cudaEventRecord( start, 0 ) );
+
+    at::Tensor h_consolidated = binary_forward::host_consolidate(consolidate_h_input1);
+    printf("computed h_consolidated\n");
+    //printInput(h_consolidated);
+
+    at::Tensor d_consolidated = binary_forward::consolidate_bits_cuda(consolidate_d_input1);
+    //checkKERNEL();
+    printf("computed d_consolidated\n");
+
+    //checkCUDA( cudaEventRecord( stop, 0 ) );
+    //checkCUDA( cudaEventSynchronize( stop ) );
+
+    //checkCUDA( cudaEventDestroy( start ) );
+    //checkCUDA( cudaEventDestroy( stop ) );
+    //checkCUDA( cudaEventElapsedTime( &elapsedTime, start, stop ) );
+
+    int64_t diff3 = torch::sum(torch::abs(h_consolidated - d_consolidated.to(torch::kCPU))).item<device_inttype>();
+    printf("Consolidation error is %ld\n",diff3);
+  }
+
+  if (TEST_NOTHRESH_CONSOLIDATE) {
+    // TODO 
+    auto options =
+        torch::TensorOptions()
+          .dtype(torch_device_inttype)
+          .layout(torch::kStrided)
+          .device(torch::kCUDA)
+          .requires_grad(false);
+
+    const int64_t threshold = (13 * 64) / 2;
+    at::Tensor i = torch::randint(minlong,maxlong,{2,4096,13},options);
+    at::Tensor w = torch::randint(minlong,maxlong,{2,13,2,128},options);
+
+    at::Tensor full_output = binary_forward::binary_forward_cuda(i, w, threshold, false);
+
+    at::Tensor step_output1 = binary_forward::binary_forward_cuda(i,w,0,false) - threshold;
+    at::Tensor step_output2 = binary_forward::consolidate_bits_cuda(step_output1);
+
+    int64_t diff = torch::sum(torch::abs(full_output - step_output2)).item<device_inttype>();
+    printf("Nothresh + consolidate error is %ld\n",diff);
+
+  }
 
   if (STRESS_TEST) {
     at::Tensor i1;
@@ -202,7 +274,7 @@ int main( int argc, char *argv[] )
     at::Tensor i2;
     at::Tensor r;
 
-    cudaProfilerStart();
+    //cudaProfilerStart();
     
  
     for (int i = 0; i < 2; i++) {
@@ -232,7 +304,7 @@ int main( int argc, char *argv[] )
       //std::cout << i << std::endl;
     }
 
-    cudaProfilerStop();
+    //cudaProfilerStop();
 
   }
 
@@ -259,7 +331,6 @@ int main( int argc, char *argv[] )
   // stop timer and print time
   checkCUDA( cudaEventRecord( stop, 0 ) );
   checkCUDA( cudaEventSynchronize( stop ) );
-  float elapsedTime;
   checkCUDA( cudaEventElapsedTime( &elapsedTime, start, stop ) );
   fprintf(stdout, "Total time GPU is %f sec\n", elapsedTime / 1000.0f );
   fprintf(stdout, "Performance is %f GBop/s\n", ( ( (double) BATCH_SIZE *
@@ -311,8 +382,11 @@ int main( int argc, char *argv[] )
     
     printf("Threshold error is %ld\n",diff1);
 
-    if( diff1 == 0 ) printf("PASS\n");
-    else printf("FAIL\n");
+    if( diff1 == 0 ) {
+      printf("PASS\n");
+    } else {
+      printf("FAIL\n");
+    }
 
   }
 
@@ -338,10 +412,16 @@ int main( int argc, char *argv[] )
     }
     printf("No threshold error is %ld\n",diff2);
 
-    if( diff2 == 0 ) printf("PASS\n");
-    else printf("FAIL\n");
-
+    if( diff2 == 0 ) {
+      printf("PASS\n");
+    } else {
+      printf("FAIL\n");
+    }
   }
+
+  printf("HERE 1");
+
+    
 
 
     

@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
 project(main LANGUAGES CXX CUDA)
 find_package(PythonLibs REQUIRED)
-include_directories(${PYTHON_INCLUDE_DIRS} "/home/luke/GA/kernels/binary/tclap-1.2.5/include" )
+message("Source dir: ${CMAKE_SOURCE_DIR}")
+include_directories(${PYTHON_INCLUDE_DIRS} "${CMAKE_SOURCE_DIR}/tclap-1.2.5/include" )
 
 
 # fetch latest argparse
@@ -18,7 +19,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
 
 
-add_executable(main main.cu binary.cu binary.cuh "/home/luke/GA/kernels/binary/tclap-1.2.5/include/tclap/CmdLine.h")
+add_executable(main main.cu binary.cu binary.cuh)
 
 target_compile_options(main PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:
                        --generate-line-info

@@ -40,6 +40,9 @@ const int OUTPUT_INTTYPE_BITS{sizeof(output_inttype) * 8};
 const int OUT_TILE_X_MULTIPLICITY{2};
 const int OUT_TILE_Y_MULTIPLICITY{4};
 
+// TODO replace all warp_size with WARP_SIZE, remove args
+const int WARP_SIZE{32};
+
 
 
 
@@ -49,8 +52,13 @@ __host__ __device__ void printbinary(unsigned char i);
 
 typedef unsigned int intType_t;
 
+at::Tensor host_consolidate(at::Tensor input);
 
 at::Tensor host_helper(at::Tensor input, at::Tensor weight, int thresh, bool verbose);
+
+at::Tensor consolidate_bits_cuda(
+        const at::Tensor& input
+        );
 
 at::Tensor binary_forward_cuda(
         const at::Tensor& input, 

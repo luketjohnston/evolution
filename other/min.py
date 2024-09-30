@@ -16,14 +16,14 @@ from tensorboard import program
 from torch.utils.tensorboard import SummaryWriter
 from binarized import EvoBinarizedMnistModel
 from evo import EvoModel
-from optimized_binary import EvoBinarizedOptimized
+from optimized_binary import EvoBinarizedOptimized, EvoBinarizedOptimizedImproved1
 
 from torch.profiler import profile, record_function, ProfilerActivity
 
 # TODO if I continue using this, make sure to acknowledge the reddit thread I got it from
 
 configs = []
-target_acc = 0.99
+target_acc = 0.9
     
 ##same_batchs=[True, False, True, False, True, False, True, False]
 same_batchs=[True]
@@ -47,32 +47,28 @@ mate_multipliers=[-1]
 #elite=False
 
 
-# TODO for some reason we are getting "CUDA an illegal memory access was encountered"
-# when pop = 1024 and hidden_sizes = 128. If we reduce either the error disappears.
-# possibly just reaching max the gpu can handle?
-# the weird thing is when I run with the same params in the kernel directly I get no error
-# (see STRESS TEST)
-# - still happens with pop 512, hs 128 mb 4096
-
 # 5e-7 expects 20 mutations
 # 5e-8 expects 2, not much point going any lower than this
 # seems like 3e-8 actually works the best. 
 lrs = [-1]
 #lrs = [0.0001 * 0.03]
 # Note that if elite = True, population_size needs to be more than 1
-population_sizes = [16]
+population_sizes = [2]
 #population_sizes = [1024]
 #num_parents_for_matings = ['all']
 num_parents_for_matings = [1]
 batch_sizes = ['all']
 # This is already at full gpu-util so no need to increase further
 minibatch_size = 4096
-hidden_sizes=[4096] 
+hidden_sizes=[128] 
 fitness_weights=False
 fitness_types = ['cross_entropy'] # 'cross_entropy','accuracy','sampled_acc'
 #load_from = 'saves/copy/min_binary_oneflip_all_aug13_2_hs4096_sbTrue_lr-1_mm8_bsall_ps16_mn1_rs6723654141_dcuda.pt'
 #load_from = 'saves/copy/min_binary_oneflip_all_aug13_1_hs4096_sbTrue_lr-1_mm8_bsall_ps16_mn1_rs2282136183_dcuda.pt'
+#load_from='saves/min_optimized_run1_hs4096_sbTrue_lr-1_mm-1_bsall_ps4_npall_rs9451484263_dcuda_const.pt'
+#load_from='saves/min_optimized_mnistFull_hs4096_sbTrue_lr-1_mm-1_bsall_ps32_npall_rs9777106787_dcuda_const.pt'
 load_from=''
+#load_from=''
 #load_from = 'saves/min_optimized_test1.1_hs4096_sbTrue_lr-1_mm-1_bsall_ps16_np1_rs4414047074_dcuda_const.pt'
 #load_from = 'saves/copy/min_binary_bnorm1_aug15_hs4096_sbTrue_lr-1_mm8_bsall_ps16_npall_rs6712504267_dcuda_batch_norm.pt'
 elite=True
@@ -80,16 +76,26 @@ layers=2
 max_generation = 200000000
 #activation='batch_norm'
 activation='const'
+use_xors = [True]
 
-# speedy learning
+
+prefix = 'xor_2layer_bn_residual_test1'
+#model_type = 'EvoBinarizedOptimizedImproved'
+#model_type = 'EvoBinarizedOptimized'
+#model_types = ['EvoBinarizedOptimized', 'EvoBinarizedOptimizedImproved']
+model_types = ['EvoBinarizedOptimizedImproved']
+#model_types = ['EvoBinarizedOptimized']
+
+## speedy learning
 #population_sizes = [2]
-#hidden_sizes=[64]
-#layers=1
+#hidden_sizes=[128]
+##hidden_sizes=[64]
+#layers=2
+#prefix = 'width_experiment_bn1'
+##load_from='saves/min_fasttest_newmnist_hs128_sbTrue_lr-1_mm-1_bsall_ps2_np1_rs6978827052_dcuda_const.pt'
+##load_from=''
 
-prefix = 'optimized_test1.3'
-model_type = 'EvoBinarizedOptimized'
-
-#prefix = 'nonoptimized_test1'
+#minibatch_size = 4
 #model_type = 'EvoBinarized'
 
 
@@ -110,7 +116,7 @@ save_every_time=600
 
 upload_every = 50000
 
-for sb, lr, mm, ps, parents, bs, hs, ft  in product(same_batchs, lrs, mate_multipliers, population_sizes, num_parents_for_matings, batch_sizes, hidden_sizes, fitness_types):
+for sb, lr, mm, ps, parents, bs, hs, ft, mt, ux  in product(same_batchs, lrs, mate_multipliers, population_sizes, num_parents_for_matings, batch_sizes, hidden_sizes, fitness_types, model_types, use_xors):
     random_seed = random.randint(0,9999999999)
 
     if mm == 8 and parents == 0.25 and lr == 2.7e-2: 
@@ -142,6 +148,9 @@ for sb, lr, mm, ps, parents, bs, hs, ft  in product(same_batchs, lrs, mate_multi
         'elite': elite,
         'layers': layers,
         'minibatch_size': minibatch_size,
+        'model_type': mt,
+        'use_xor': ux,
+        
         })
 
 
@@ -238,11 +247,12 @@ def compute_loss(original_output, mutation_output, target, config):
         ave_fitness = -1 * mutation_loss.mean().item()
     
     
-        if model_type == 'EvoBinarized'  or model_type == 'EvoBinarizedOptimized':
+        if 'EvoBinarized' in config['model_type']:
             #print("ML:", mutation_loss)
             #print("ML[0]:", mutation_loss[0])
             improvements = - mutation_loss + mutation_loss[0] 
         else:
+            assert False
             improvements = original_loss - mutation_loss
     
     elif config['fitness_type'] == 'sampled_acc':
@@ -283,8 +293,9 @@ def main(config):
     batch_size = config['batch_size']
     same_batch = config['same_batch']
     random_seed = config['random_seed']
+    model_type = config['model_type']
 
-    experiment_name=f'min_{prefix}_hs{hidden_size}_sb{same_batch}_lr{lr}_mm{mate_multiplier}_bs{batch_size}_ps{population_size}_np{num_parents_for_mating}_rs{random_seed}_d{device}_{activation}'
+    experiment_name=f'min_{prefix}_m{model_type}_hs{hidden_size}_sb{same_batch}_lr{lr}_mm{mate_multiplier}_bs{batch_size}_ps{population_size}_np{num_parents_for_mating}_rs{random_seed}_d{device}_{activation}'
 
     tracking_address = f'./tensorboards/{experiment_name}'
     while os.path.exists(tracking_address):
@@ -314,11 +325,12 @@ def main(config):
     # works fine with only one worker and two workers doesn't seem to speed anything up
     #train_loader = SyncMPD(population_size, batch_size, device, same_batch) 
 
-    if model_type == 'EvoBinarizedOptimized':
+    if 'BinarizedOptimized' in model_type:
       train_loader = BinarizedMnistDataloader(device, train=True)
       val_loader = BinarizedMnistDataloader(device, train=False)
       assert batch_size == 'all'
     else:
+      assert False
       train_loader = MPD(population_size, batch_size, 1, 2, device, same_batch) 
       val = datasets.MNIST('./data/mnist', train=False, transform=transform)
       val_loader = torch.utils.data.DataLoader(val, val_batch_size, shuffle=False, pin_memory=False)
@@ -337,7 +349,10 @@ def main(config):
             model = EvoBinarizedMnistModel(hidden_size=hidden_size, elite=config['elite'], layers=config['layers'], activation=activation)
             model = model.to(device)
         elif model_type == 'EvoBinarizedOptimized':
-            model = EvoBinarizedOptimized(hidden_size=hidden_size, elite=config['elite'], layers=config['layers'], activation=activation)
+            model = EvoBinarizedOptimized(hidden_size=hidden_size, elite=config['elite'], layers=config['layers'], activation=activation, use_xor=config['use_xor'])
+            model = model.to(device)
+        elif model_type == 'EvoBinarizedOptimizedImproved':
+            model = EvoBinarizedOptimizedImproved1(hidden_size=hidden_size, elite=config['elite'], layers=config['layers'], activation=activation, use_xor=config['use_xor'])
             model = model.to(device)
         else:
             assert False
@@ -346,16 +361,15 @@ def main(config):
         print(f"Loaded model from {config['load_from']}")
 
     # TODO make it so model.parameters() works
-    param_count = sum([np.prod(layer.w.size()) for layer in model.layers])
-    print('Param count: ', param_count)
-    print('Expected flips per mutation: ', config['lr'] * param_count)
+    #param_count = sum([np.prod(layer.w.size()) for layer in model.layers])
+    #print('Param count: ', param_count)
+    #print('Expected flips per mutation: ', config['lr'] * param_count)
 
     generation_count = 0
     model.reset()
     #loss, accuracy = evaluate(model, val_loader)
     #print(f'loss: {loss:.4f} | accuracy: {accuracy:.2%}')
     
-    model.eval()
     t0 = time.time()
     start = t0
     last_eval = start
@@ -377,6 +391,7 @@ def main(config):
         done = False
         while not done:
             for input, target in train_loader:
+                model.train() # need to be training for batch norm
                 model.next_generation(population_size, lr)
                 input, target = input.to(device), target.to(device)
 
@@ -466,6 +481,7 @@ def main(config):
                     dt = time.time() - t0
 
                     model.reset()
+                    print("Training ave loss:", -ave_fitness)
                     loss, accuracy = evaluate(model, val_loader)
 
                     writer.add_scalar('best_val_loss', loss, generation_count)

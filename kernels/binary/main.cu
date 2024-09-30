@@ -257,9 +257,9 @@ int main( int argc, char *argv[] )
     at::Tensor i = torch::randint(minlong,maxlong,{2,4096,13},options);
     at::Tensor w = torch::randint(minlong,maxlong,{2,13,2,128},options);
 
-    at::Tensor full_output = binary_forward::binary_forward_cuda(i, w, threshold, false);
+    at::Tensor full_output = binary_forward::binary_forward_cuda(i, w, threshold, false, false);
 
-    at::Tensor step_output1 = binary_forward::binary_forward_cuda(i,w,0,false) - threshold;
+    at::Tensor step_output1 = binary_forward::binary_forward_cuda(i,w,0,false, false) - threshold;
     at::Tensor step_output2 = binary_forward::consolidate_bits_cuda(step_output1);
 
     int64_t diff = torch::sum(torch::abs(full_output - step_output2)).item<device_inttype>();
@@ -291,6 +291,7 @@ int main( int argc, char *argv[] )
           i1,
           w1,
           (64*64)/2,
+          false,
           false);
 
       //w2 = torch::randint(minlong,maxlong,{2,1024,2,10},options);
@@ -318,13 +319,15 @@ int main( int argc, char *argv[] )
     d_input,
     d_weight,
     threshold,
-    verbose);
+    verbose,
+    false);
 
   at::Tensor d_out_nothresh = binary_forward::binary_forward_cuda(
     d_input,
     d_weight,
     0,
-    verbose);
+    verbose,
+    false);
 
   checkKERNEL();
 

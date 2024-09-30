@@ -37,6 +37,8 @@ const int DEVICE_INTTYPE_BYTES{sizeof(device_inttype)};
 typedef int32_t output_inttype;
 const int OUTPUT_INTTYPE_BITS{sizeof(output_inttype) * 8};
 
+// NOTE optimal settings here change depending on use_xor, TODO implement different
+// constants for each...
 const int OUT_TILE_X_MULTIPLICITY{2};
 const int OUT_TILE_Y_MULTIPLICITY{4};
 
@@ -64,7 +66,8 @@ at::Tensor binary_forward_cuda(
         const at::Tensor& input, 
         const at::Tensor& weight, 
         const int64_t thresh,
-        const bool verbose
+        const bool verbose,
+        const bool use_xor
         );
 
 }

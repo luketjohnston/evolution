@@ -13,26 +13,35 @@ except:
 
 
 class EvoBinarizedLayerOptimized(nn.Module):
-    def __init__(self, in_features: int, out_features: int, elite=True, activation='none'):
+    def __init__(self, in_features: int, out_features: int, elite=True, activation='none', use_xor=False):
         super().__init__()
         self.w: torch.Tensor
         self.elite = elite
         self.activation = activation
         self.in_features = in_features
         self.out_features = out_features
+        self.use_xor = use_xor
         # TODO add seed?
 
         in_ints = (in_features + 63) // 64
         self.rounded_in_features = in_ints * 64
 
-        # the size 2 (second to last) dimension is for whether this w acts on x, or on ~x
-        w = torch.randint(low=-2**63, high=2**63-1, size=[1,in_ints,2,out_features], dtype=torch.int64)
+        if use_xor:
+          self.wdim2 = 1
+        else: # use 'and'
+          # the size 2 (second to last) dimension is for whether this w acts on x, or on ~x
+          self.wdim2 = 2
+
+        w = torch.randint(low=-2**63, high=2**63-1, size=[1,in_ints,self.wdim2,out_features], dtype=torch.int64)
         
         self.register_buffer('w', w)
         if activation == 'const':
           self.thresh = self.rounded_in_features // 2 + 1 # kernel uses >= for thresholding
+          print("Making layer with threshold: ", self.thresh)
 
     def next_generation(self, population_size: int, lr=-1, mutate=True):
+        self.all_r = []
+        self.total_forwarded = 0
         device = self.w.device
         #print('in next generation,  self w at beginning:', self.w)
         assert lr==-1
@@ -45,7 +54,7 @@ class EvoBinarizedLayerOptimized(nn.Module):
     
             i0 = torch.arange(population_size, device=device)
             i1 = torch.randint(in_features, size=(population_size,), device=device)
-            i2 = torch.randint(2, size=(population_size,), device=device)
+            i2 = torch.randint(self.wdim2, size=(population_size,), device=device)
             i3 = torch.randint(out_features, size=(population_size,), device=device)
 
             # I used to put all these into one tuple called "indices" and it just would
@@ -119,44 +128,69 @@ class EvoBinarizedLayerOptimized(nn.Module):
 
         if self.activation == 'none':
           # when called with threshold == 0, returns the integer activations
-          r = torch.ops.binary_forward.binary_forward_cuda(x, self.w, 0, False)
-
-          if show_dead:
-               print("Reduction with or: 0s are always 0:")
-               a1 = r.numpy().bitwise_or.reduce(axis=1))
-               total_always_zero = np.sum( (1 - np.unpackbits(a1.view(np.uint8))), axis=1)
-               print("Total that are always 0: ",  total_always_zero)
-
-               print("Reduction with and: 1s are always 1:")
-               a2 = r.numpy().bitwise_and.reduce(axis=1)
-               total_always_one = np.sum( (np.unpackbits(a2.view(np.uint8))), axis=1)
-               print("Total that are always 1: ",  total_always_one)
-               print(f"Fraction dead: {total_always_zero} + {total_always_one} / {a2.shape} = {total_always_zero + total_always_one / a2.shape[1]}")
-
+          r = torch.ops.binary_forward.binary_forward_cuda(x, self.w, 0, False, self.use_xor)
               
           return r
         elif self.activation == 'const':
-          r = torch.ops.binary_forward.binary_forward_cuda(x, self.w, self.thresh, True)
+          r = torch.ops.binary_forward.binary_forward_cuda(x, self.w, self.thresh, False, self.use_xor)
+
+          if show_dead:
+               #print("Reduction with or: 0s are always 0:")
+               #print_binarized(r[0,:,0])
+
+               try:
+                 self.all_r.append(r.cpu().numpy())
+               except:
+                 return r
+
+               self.total_forwarded  += r.shape[1]
+
+               if self.total_forwarded >= 60000:
+                   myr = np.concatenate(self.all_r, axis=1)
+                   print('myr shape:', myr.shape)
+                   self.all_r = []
+                   self.total_forwarded = 0
+                 
+
+                   a1 = np.bitwise_or.reduce(myr, axis=1)
+                   #print('a1 shape:', a1.shape)
+                   #print('unpacked bits shape:', np.unpackbits(a1.view(np.uint8)).shape)
+                   total_always_zero = np.sum( (1 - np.unpackbits(a1.view(np.uint8)).reshape((r.shape[0], -1))), axis=1)
+                   #print("Total that are always 0: ",  total_always_zero)
+
+                   #print("Reduction with and: 1s are always 1:")
+                   a2 = np.bitwise_and.reduce(myr, axis=1)
+                   #print('a2 shape:', a2.shape)
+                   #print('unpacked bits shape:', np.unpackbits(a2.view(np.uint8)).shape)
+                   total_always_one = np.sum( (np.unpackbits(a2.view(np.uint8)).reshape((r.shape[0], -1))), axis=1)
+
+                   #print("Total that are always 1: ",  total_always_one)
+                   print(f"Fraction dead: {total_always_zero} + {total_always_one} / {a2.shape[1] * 64} = {(total_always_zero + total_always_one) / (a2.shape[1] * 64)}")
           return r
         else:
           assert False
 
 
 class EvoBinarizedOptimized(nn.Module):
-    def __init__(self, input_size = 28*28*8, hidden_size = 4096, output_size=10, temperature = 0.8, elite=True, layers=1, activation='const'):
+    #def __init__(self, input_size = 28*28*8, hidden_size = 4096, output_size=10, temperature = 0.8, elite=True, layers=1, activation='const'):
+    def __init__(self, input_size = 28*28, hidden_size = 4096, output_size=10, temperature = 0.8, elite=True, layers=1, activation='const', use_xor=False):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.activation = activation
-        
-        self.layers = nn.ModuleList([])
-        self.layers.append(EvoBinarizedLayerOptimized(in_features=input_size, out_features=hidden_size, elite=elite, activation=activation))
-        for _ in range(layers-1):
-            self.layers.append(EvoBinarizedLayerOptimized(in_features=hidden_size, out_features=hidden_size, elite=elite, activation=activation))
-        self.layers.append(EvoBinarizedLayerOptimized(in_features=hidden_size, out_features=output_size, elite=elite, activation='none'))
-
         self.temperature = temperature
+        self.elite = elite
+        self.num_layers = layers
+        self.use_xor = use_xor
+        self.init_layers()
+
+    def init_layers(self):
+        self.layers = nn.ModuleList([])
+        self.layers.append(EvoBinarizedLayerOptimized(in_features=self.input_size, out_features=self.hidden_size, elite=self.elite, activation=self.activation, use_xor=self.use_xor))
+        for _ in range(self.num_layers-1):
+            self.layers.append(EvoBinarizedLayerOptimized(in_features=self.hidden_size, out_features=self.hidden_size, elite=self.elite, activation=self.activation, use_xor=self.use_xor))
+        self.layers.append(EvoBinarizedLayerOptimized(in_features=self.hidden_size, out_features=self.output_size, elite=self.elite, activation='none', use_xor=self.use_xor))
 
     def forward(self, x):
         if isinstance(x, list):
@@ -172,10 +206,13 @@ class EvoBinarizedOptimized(nn.Module):
 
     def next_generation(self, population_size: int, lr: float):
 
-        layer_to_mutate = random.randrange(len(self.layers))
+        layer_to_mutate = random.randrange(self.num_layers + 1)
+        i = 0
 
-        for i,m in enumerate(self.layers):
-            m.next_generation(population_size, lr, mutate=(i==layer_to_mutate))
+        for j,m in enumerate(self.layers):
+            if isinstance(m, EvoBinarizedLayerOptimized):
+                m.next_generation(population_size, lr, mutate=(i==layer_to_mutate))
+                i+=1
 
     def mate(self, parents, **kwargs):
         for m in self.modules():
@@ -187,6 +224,106 @@ class EvoBinarizedOptimized(nn.Module):
             if isinstance(m, EvoBinarizedLayerOptimized):
                 m.reset()
 
+def mean_of_long(x, dim):
+    s = torch.sum(x, dim=dim, keepdims=True)
+    r =  torch.floor_divide(s, x.shape[dim])
+    return r
+
+class BatchCenterZero(nn.Module):
+    def __init__(self, epsilon = 0.95):
+        super().__init__()
+        self.running_means = None  # TODO can we just set to 0 and let broadcasting do the work
+        self.epsilon = epsilon
+    def forward(self, x):
+        #print("Before batch center 0:", x[0,0,0:64])
+        if self.training:
+            # TODO taking two means like this is not precisely accurate, should compute all at once
+            means_per_pop = mean_of_long(x, dim=1)
+            if self.running_means is None:
+                self.running_means = means_per_pop[0:1]
+            else:
+                self.running_means = self.running_means * self.epsilon + (1 - self.epsilon) * means_per_pop[0:1]
+            r = x - means_per_pop
+        else:
+            #print(self.running_means)
+            #print("In eval x before: ", x)
+            r =  x - (self.running_means.to(torch.int64))
+            #print("In eval r after: ", r)
+        #print("After batch center 0:", r[0,0,0:64])
+        return r
+
+class SubtractLayer(nn.Module):
+    def __init__(self, threshold):
+        super().__init__()
+        self.threshold = threshold
+    def forward(self, x):
+        #print('After sub layer, total above 0:',  torch.sum((x - self.threshold) >= 0) / torch.numel(x))
+        return x - self.threshold
+
+
+class ConsolidateBits(nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self,x):
+        #print("Before consolidate bits: ", x[-1,1111,-128:-64])
+        r =  torch.ops.binary_forward.consolidate_bits_cuda(x)
+        #print("After consolidate bits: ")
+        #print_binarized(r[-1,1111,-2])
+        return r
+
+
+class EvoBinarizedOptimizedImproved1(EvoBinarizedOptimized):
+    def __init__(self, input_size = 28*28, hidden_size = 4096, output_size=10, temperature = 0.8, elite=True, layers=1, activation='const', use_xor=False, residual=True):
+        self.residual = residual
+        super().__init__(input_size, hidden_size, output_size, temperature, elite, layers, activation, use_xor)
+
+
+    def init_layers(self):
+
+        self.layers = nn.ModuleList([])
+        self.layers.append(EvoBinarizedLayerOptimized(in_features=self.input_size, out_features=self.hidden_size, elite=self.elite, activation='none', use_xor=self.use_xor))
+
+        self.layers.append(BatchCenterZero())
+
+        #rounded_in_features = ((self.input_size + 63) // 64) * 64
+        #self.layers.append(SubtractLayer(rounded_in_features // 2 + 1))
+
+        self.layers.append(ConsolidateBits())
+
+        for _ in range(self.num_layers-1):
+            self.layers.append(EvoBinarizedLayerOptimized(in_features=self.hidden_size, out_features=self.hidden_size, elite=self.elite, activation='none', use_xor=self.use_xor))
+
+            self.layers.append(BatchCenterZero())
+
+            #self.layers.append(SubtractLayer(self.hidden_size // 2 + 1))
+            self.layers.append(ConsolidateBits())
+
+
+        self.layers.append(EvoBinarizedLayerOptimized(in_features=self.hidden_size, out_features=self.output_size, elite=self.elite, activation='none', use_xor=self.use_xor))
+
+    def forward(self, x):
+        if isinstance(x, list):
+            assert len(x) == 1 or len(x) == 2
+            x = x[0]
+
+        last_input = torch.zeros([x.shape[0], x.shape[1], self.hidden_size], dtype=torch.long, device=x.device)
+        for i,layer in enumerate(self.layers):
+
+            x = layer.forward(x)
+
+            # for residual connection
+            if self.residual and isinstance(layer, BatchCenterZero) and last_input.shape == x.shape:
+                #print("Adding residual", last_input)
+                x += last_input
+                last_input = x
+            
+
+        # TODO Is this the best way to scale? Does it depend on hidden layer size etc?
+        return x ** self.temperature
+
+        
+        
+        
 
 
 

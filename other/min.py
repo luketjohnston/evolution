@@ -23,7 +23,7 @@ from torch.profiler import profile, record_function, ProfilerActivity
 # TODO if I continue using this, make sure to acknowledge the reddit thread I got it from
 
 configs = []
-target_acc = 0.9
+target_acc = 0.999
     
 ##same_batchs=[True, False, True, False, True, False, True, False]
 same_batchs=[True]
@@ -72,18 +72,18 @@ load_from=''
 #load_from = 'saves/min_optimized_test1.1_hs4096_sbTrue_lr-1_mm-1_bsall_ps16_np1_rs4414047074_dcuda_const.pt'
 #load_from = 'saves/copy/min_binary_bnorm1_aug15_hs4096_sbTrue_lr-1_mm8_bsall_ps16_npall_rs6712504267_dcuda_batch_norm.pt'
 elite=True
-layers=2
-max_generation = 200000000
+layers_l=[1]
+max_generation = 20000000000
 #activation='batch_norm'
 activation='const'
-use_xors = [True]
+use_xors = [False]
 
 
-prefix = 'xor_2layer_bn_residual_test1'
+prefix = '1layer_convergence1'
 #model_type = 'EvoBinarizedOptimizedImproved'
-#model_type = 'EvoBinarizedOptimized'
+model_types = ['EvoBinarizedOptimized']
 #model_types = ['EvoBinarizedOptimized', 'EvoBinarizedOptimizedImproved']
-model_types = ['EvoBinarizedOptimizedImproved']
+#model_types = ['EvoBinarizedOptimizedImproved']
 #model_types = ['EvoBinarizedOptimized']
 
 ## speedy learning
@@ -116,7 +116,7 @@ save_every_time=600
 
 upload_every = 50000
 
-for sb, lr, mm, ps, parents, bs, hs, ft, mt, ux  in product(same_batchs, lrs, mate_multipliers, population_sizes, num_parents_for_matings, batch_sizes, hidden_sizes, fitness_types, model_types, use_xors):
+for sb, lr, mm, ps, parents, bs, hs, ft, mt, ux, layers  in product(same_batchs, lrs, mate_multipliers, population_sizes, num_parents_for_matings, batch_sizes, hidden_sizes, fitness_types, model_types, use_xors, layers_l):
     random_seed = random.randint(0,9999999999)
 
     if mm == 8 and parents == 0.25 and lr == 2.7e-2: 
@@ -268,7 +268,8 @@ def compute_loss(original_output, mutation_output, target, config):
         improvements = mutation_correct.float() - original_correct.float()
     else:
         assert False
-    return improvements, ave_fitness
+    # last return is the loss of the parent
+    return improvements, ave_fitness, mutation_loss[0]
 
 
 
@@ -410,6 +411,8 @@ def main(config):
 
                     improvements = torch.zeros(population_size, device=device)
                     ave_fitness = 0
+                    parent_loss = 0
+                    total = 0
 
                     for input, target in zip(minibatch_x, minibatch_y):
                         input = input.unsqueeze(0).expand((population_size, *input.shape))
@@ -424,15 +427,20 @@ def main(config):
                             original_output, mutation_output = r.float(), r.float()
                         #print("mutation output after convert to float:", mutation_output)
 
-                        improvements_mb, ave_fitness = compute_loss(original_output, mutation_output, target, config)
+                        improvements_mb, ave_fitness, parent_loss_mb = compute_loss(original_output, mutation_output, target, config)
                         #print("Improvements_mb:", improvements_mb)
+                        # TODO this isn't exactly accurrate if minibatches are different sizes
+                        parent_loss += (parent_loss_mb * input.shape[0]) 
+                        total += input.shape[0]
                         improvements += improvements_mb
-                        ave_fitness += ave_fitness / num_minibatches
+                        ave_fitness += (ave_fitness * input.shape[0])
                         del original_output # remove these so they don't take memory anymore, probably not important
                         del mutation_output
                         del input
                         del target
                         #print(improvements)
+                    parent_loss /= total
+                    ave_fitness /= total
 
 
                     #assert(torch.sum(mutation_output[0,0] == mutation_output[0,1])  < mutation_output[0,1].shape[0])
@@ -461,6 +469,7 @@ def main(config):
 
 
                 writer.add_scalar('ave_fitness', ave_fitness, generation_count)
+                writer.add_scalar('train_parent_loss', parent_loss, generation_count)
 
                 if num_parents_for_mating == 'all':
                     parents = (improvements > 0).nonzero().squeeze(dim=1).cpu()

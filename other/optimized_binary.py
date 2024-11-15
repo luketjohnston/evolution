@@ -3,6 +3,7 @@ import random
 import torch
 import torch.nn as nn
 from test import print_binarized
+from torch.nn import BatchNorm1d
 
 
 try:
@@ -252,6 +253,29 @@ class BatchCenterZero(nn.Module):
         #print("After batch center 0:", r[0,0,0:64])
         return r
 
+class LongBatchNorm(nn.Module):
+    def __init__(self, epsilon = 0.95):
+        super().__init__()
+        self.running_means = None  # TODO can we just set to 0 and let broadcasting do the work
+        self.epsilon = epsilon
+    def forward(self, x):
+        #print("Before batch center 0:", x[0,0,0:64])
+        if self.training:
+            # TODO taking two means like this is not precisely accurate, should compute all at once
+            means_per_pop = mean_of_long(x, dim=1)
+            if self.running_means is None:
+                self.running_means = means_per_pop[0:1]
+            else:
+                self.running_means = self.running_means * self.epsilon + (1 - self.epsilon) * means_per_pop[0:1]
+            r = x - means_per_pop
+        else:
+            #print(self.running_means)
+            #print("In eval x before: ", x)
+            r =  x - (self.running_means.to(torch.int64))
+            #print("In eval r after: ", r)
+        #print("After batch center 0:", r[0,0,0:64])
+        return r
+
 class SubtractLayer(nn.Module):
     def __init__(self, threshold):
         super().__init__()
@@ -260,6 +284,32 @@ class SubtractLayer(nn.Module):
         #print('After sub layer, total above 0:',  torch.sum((x - self.threshold) >= 0) / torch.numel(x))
         return x - self.threshold
 
+class MyBatchNorm(nn.Module):
+    def __init__(self, num_features):
+        super().__init__()
+        self.bn = BatchNorm1d(num_features).cuda()
+
+    def forward(self, x):
+        (p,b,n) = x.shape
+        x = x.float()
+        x = self.bn(x.view([-1,n])).long()
+        return x.view([p,b,n])
+
+class ScaleLayer(nn.Module):
+    def __init__(self, in_features, scale_to):
+        super().__init__()
+        self.in_features = in_features
+        self.scale_to = scale_to
+
+    def forward(self, x):
+        #print("\nbefore mean scale to: ", torch.mean(x.float()))
+        #print("before var scale to: ", torch.var(x.float()))
+        #print("in features:", self.in_features)
+        #print("scale_to:", self.scale_to)
+        r =  torch.floor_divide((x * self.scale_to), (self.in_features // 4)**0.5).long()
+        #print("after mean scale to: ", torch.mean(r.float()))
+        #print("after var scale to: ", torch.var(r.float()))
+        return r
 
 class ConsolidateBits(nn.Module):
     def __init__(self):
@@ -273,31 +323,42 @@ class ConsolidateBits(nn.Module):
 
 
 class EvoBinarizedOptimizedImproved1(EvoBinarizedOptimized):
-    def __init__(self, input_size = 28*28, hidden_size = 4096, output_size=10, temperature = 0.8, elite=True, layers=1, activation='const', use_xor=False, residual=True):
+    def __init__(self, input_size = 28*28, hidden_size = 4096, output_size=10, temperature = 0.8, elite=True, layers=1, activation='const', use_xor=False, residual=True, normalization='batch_norm'):
         self.residual = residual
+        self.normalization = normalization
+        if normalization == 'batch_center':
+            self.regularization_layer = BatchCenterZero
+        elif normalization == 'scale':
+            self.regularization_layer = ScaleLayer
+        elif normalization == 'batch_norm':
+            self.regularization_layer = MyBatchNorm
+        else:
+            assert False
+
         super().__init__(input_size, hidden_size, output_size, temperature, elite, layers, activation, use_xor)
 
 
     def init_layers(self):
 
         self.layers = nn.ModuleList([])
-        self.layers.append(EvoBinarizedLayerOptimized(in_features=self.input_size, out_features=self.hidden_size, elite=self.elite, activation='none', use_xor=self.use_xor))
 
-        self.layers.append(BatchCenterZero())
+        rounded_in_features = ((self.input_size + 63) // 64) * 64
+        layer_input_features = rounded_in_features
+        for _ in range(self.num_layers):
+            self.layers.append(EvoBinarizedLayerOptimized(in_features=layer_input_features, out_features=self.hidden_size, elite=self.elite, activation='none', use_xor=self.use_xor))
 
-        #rounded_in_features = ((self.input_size + 63) // 64) * 64
-        #self.layers.append(SubtractLayer(rounded_in_features // 2 + 1))
+            if self.normalization == 'batch_center':
+              self.layers.append(BatchCenterZero())
+            elif self.normalization == 'scale':
+              self.layers.append(SubtractLayer(layer_input_features // 2 + 1))
+              self.layers.append(ScaleLayer(layer_input_features, 100))
+              # need to scale activations to all be the same magnitude
+            elif self.normalization == 'batch_norm':
+              self.layers.append(MyBatchNorm(self.hidden_size))
 
-        self.layers.append(ConsolidateBits())
+            layer_input_features = self.hidden_size
 
-        for _ in range(self.num_layers-1):
-            self.layers.append(EvoBinarizedLayerOptimized(in_features=self.hidden_size, out_features=self.hidden_size, elite=self.elite, activation='none', use_xor=self.use_xor))
-
-            self.layers.append(BatchCenterZero())
-
-            #self.layers.append(SubtractLayer(self.hidden_size // 2 + 1))
             self.layers.append(ConsolidateBits())
-
 
         self.layers.append(EvoBinarizedLayerOptimized(in_features=self.hidden_size, out_features=self.output_size, elite=self.elite, activation='none', use_xor=self.use_xor))
 
@@ -312,7 +373,7 @@ class EvoBinarizedOptimizedImproved1(EvoBinarizedOptimized):
             x = layer.forward(x)
 
             # for residual connection
-            if self.residual and isinstance(layer, BatchCenterZero) and last_input.shape == x.shape:
+            if self.residual and isinstance(layer, self.regularization_layer) and last_input.shape == x.shape:
                 #print("Adding residual", last_input)
                 x += last_input
                 last_input = x
